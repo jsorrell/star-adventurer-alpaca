@@ -3,6 +3,7 @@ extern crate core;
 extern crate assert_float_eq;
 
 mod astro_math;
+pub mod config;
 pub mod enums;
 pub mod errors;
 pub mod guide;
@@ -15,6 +16,7 @@ pub mod target;
 pub mod tracking;
 
 use crate::astro_math::{Degrees, Hours};
+use crate::config::Config;
 use crate::enums::{
     AlignmentMode, EquatorialCoordinateType, MotionState, PierSide, SlewingState, Target,
     TrackingRate, TrackingState,
@@ -28,15 +30,6 @@ use synscan::util::{AutoGuideSpeed, SingleChannel};
 use synscan::MotorParameters;
 
 const RA_CHANNEL: &SingleChannel = &SingleChannel::Channel1;
-
-pub struct Config {
-    latitude: Degrees,
-    longitude: Degrees,
-    elevation: f64,
-    aperture: Option<f64>,
-    aperture_area: Option<f64>,
-    focal_length: Option<f64>,
-}
 
 #[derive(Debug)]
 struct State {
@@ -229,75 +222,4 @@ impl StarAdventurer {
             format!("Side of pier control not implemented"),
         ))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{TimeZone, Utc};
-
-    // fn print_status(sa: &mut StarAdventurer) {
-    //     let status = sa.driver.get_status(&SingleChannel::Channel1).unwrap();
-    //     let motion_rate = sa.driver.get_motion_rate_degrees(&SingleChannel::Channel1).unwrap();
-    //     println!("--------------------------\n{}\nDegrees Per Sec: {}\n--------------------------\n", status, motion_rate);
-    // }
-
-    fn create_sa(config: Option<Config>) -> StarAdventurer {
-        let config = config.unwrap_or(Config {
-            latitude: ***REMOVED***,
-            longitude: ***REMOVED***,
-            elevation: ***REMOVED***,
-            aperture: ***REMOVED***,
-            aperture_area: ***REMOVED***,
-            focal_length: ***REMOVED***,
-        });
-
-        StarAdventurer::new("/dev/ttyUSB0", 115_200, Duration::from_millis(250), config).unwrap()
-    }
-
-    #[test]
-    fn test_date() {
-        let mut sa = create_sa(None);
-
-        let test_date = Utc.ymd(2222, 01, 01).and_hms(10, 00, 00);
-        sa.set_utc_date(test_date).unwrap();
-        assert!(sa.get_utc_date().unwrap() - test_date < chrono::Duration::milliseconds(1));
-        std::thread::sleep(Duration::from_millis(1000));
-        assert!(
-            sa.get_utc_date().unwrap() - test_date - chrono::Duration::milliseconds(1000)
-                < chrono::Duration::milliseconds(5)
-        );
-    }
-
-    #[test]
-    fn test_observing_location() {
-        let mut sa = create_sa(None);
-
-        let test_lat0 = 59.8843434;
-        let test_lat1 = -33.;
-
-        let test_long = 77.;
-
-        let test_elevation = 999.;
-
-        sa.set_latitude(test_lat0).unwrap();
-        assert_eq!(sa.get_latitude().unwrap(), test_lat0);
-
-        sa.set_longitude(test_long).unwrap();
-        assert_eq!(sa.get_longitude().unwrap(), test_long);
-        assert_eq!(sa.get_latitude().unwrap(), test_lat0);
-
-        sa.set_elevation(test_elevation).unwrap();
-        assert_eq!(sa.get_longitude().unwrap(), test_long);
-        assert_eq!(sa.get_latitude().unwrap(), test_lat0);
-        assert_eq!(sa.get_elevation().unwrap(), test_elevation);
-
-        sa.set_latitude(test_lat1).unwrap();
-        assert_eq!(sa.get_longitude().unwrap(), test_long);
-        assert_eq!(sa.get_latitude().unwrap(), test_lat1);
-        assert_eq!(sa.get_elevation().unwrap(), test_elevation);
-    }
-
-    #[test]
-    fn test_slew() {}
 }
