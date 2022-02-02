@@ -20,12 +20,14 @@ impl StarAdventurer {
 
     /// The right ascension (hours) of the mount's current equatorial coordinates,
     /// in the coordinate system given by the EquatorialSystem property
-    pub fn get_ra(&mut self) -> Result<Hours> {
-        let state = self.state.read().unwrap();
+    pub async fn get_ra(&mut self) -> Result<Hours> {
+        let state = self.state.read().await;
         let lst = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state.date_offset),
-            state.longitude,
+            state.observation_location.longitude,
         );
+
+        // FIXME spawn task for driver operation
 
         let mut driver = self.driver.lock().unwrap();
         Ok(Self::calculate_ra(
@@ -36,35 +38,35 @@ impl StarAdventurer {
 
     /// The declination (degrees) of the mount's current equatorial coordinates, in the coordinate system given by the EquatorialSystem property.
     /// Reading the property will raise an error if the value is unavailable.
-    pub fn get_declination(&self) -> Result<Degrees> {
-        Ok(self.state.read().unwrap().declination)
+    pub async fn get_dec(&self) -> Result<Degrees> {
+        Ok(self.state.read().await.declination)
     }
 
     /// The altitude above the local horizon of the mount's current position (degrees, positive up)
     pub async fn get_altitude(&mut self) -> Result<Degrees> {
-        let state = self.state.read().unwrap();
+        let state = self.state.read().await;
         let mut driver = self.driver.lock().unwrap();
 
         let hour_angle = Self::get_hour_angle(&mut driver, state.hour_angle_offset)?;
 
-        Ok(astro_math::calculate_alt_from_ha(
+        Ok(astro_math::calculate_alt_from_ha_dec(
             hour_angle,
             state.declination,
-            state.latitude,
+            state.observation_location.latitude,
         ))
     }
 
     /// The azimuth at the local horizon of the mount's current position (degrees, North-referenced, positive East/clockwise).
-    pub fn get_azimuth(&mut self) -> Result<f64> {
-        let state = self.state.read().unwrap();
+    pub async fn get_azimuth(&mut self) -> Result<f64> {
+        let state = self.state.read().await;
         let mut driver = self.driver.lock().unwrap();
 
         let hour_angle = Self::get_hour_angle(&mut driver, state.hour_angle_offset)?;
 
-        Ok(astro_math::calculate_az_from_ha(
+        Ok(astro_math::calculate_az_from_ha_dec(
             hour_angle,
             state.declination,
-            state.latitude,
+            state.observation_location.latitude,
         ))
     }
 }

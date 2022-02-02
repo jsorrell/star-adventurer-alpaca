@@ -2,9 +2,10 @@ use crate::astro_math::Degrees;
 use crate::enums::*;
 use crate::errors::{AlpacaError, ErrorType, Result};
 use crate::{StarAdventurer, RA_CHANNEL};
-use std::sync::Arc;
 use std::time::Duration;
+use synscan::motors::DriveMode;
 use synscan::util::AutoGuideSpeed;
+use tokio::sync::watch;
 use tokio::task;
 use tokio::time::sleep;
 
@@ -33,8 +34,8 @@ impl StarAdventurer {
     }
 
     /// The current RightAscension movement rate offset for telescope guiding (degrees/sec)
-    pub fn get_guide_rate_ra(&self) -> Result<Degrees> {
-        let state = self.state.read().unwrap();
+    pub async fn get_guide_rate_ra(&self) -> Result<Degrees> {
+        let state = self.state.read().await;
         Ok(Self::calc_guide_rate(
             state.autoguide_speed,
             state.tracking_rate,
@@ -43,7 +44,7 @@ impl StarAdventurer {
 
     /// Sets the current RightAscension movement rate offset for telescope guiding (degrees/sec).
     pub async fn set_guide_rate_ra(&mut self, rate: Degrees) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().await;
         let lowest_guide_rate = AutoGuideSpeed::Eighth.multiplier() * state.tracking_rate.as_deg();
         let highest_guide_rate = AutoGuideSpeed::One.multiplier() * state.tracking_rate.as_deg();
         if rate < lowest_guide_rate * 0.9 || highest_guide_rate * 1.1 < rate {
@@ -78,8 +79,15 @@ impl StarAdventurer {
         );
         state.autoguide_speed = *best_speed;
 
-        let mut driver = self.driver.lock().unwrap();
-        driver.set_autoguide_speed(RA_CHANNEL, *best_speed)?;
+        let driver_clone = self.driver.clone();
+
+        task::spawn_blocking(move || {
+            let mut driver = driver_clone.lock().unwrap();
+            driver.set_autoguide_speed(RA_CHANNEL, *best_speed)
+        })
+        .await
+        .unwrap()?;
+
         Ok(())
     }
 
@@ -107,7 +115,11 @@ impl StarAdventurer {
     }
 
     /// Moves the scope in the given direction for the given interval or time at the rate given by the corresponding guide rate property
-    pub fn pulse_guide(&mut self, guide_direction: GuideDirection, duration: u32) -> Result<()> {
+    pub async fn pulse_guide(
+        &mut self,
+        guide_direction: GuideDirection,
+        duration: u32,
+    ) -> Result<()> {
         if guide_direction == GuideDirection::North || guide_direction == GuideDirection::South {
             return Err(AlpacaError::from_msg(
                 ErrorType::ActionNotImplemented,
@@ -115,65 +127,97 @@ impl StarAdventurer {
             ));
         }
 
-        let mut state = self.state.write().unwrap();
-        let mut driver = self.driver.lock().unwrap();
-
-        let state_to_restore = {
-            let (tracking_rate, state_to_restore) = match &state.motion_state {
-                MotionState::Slewing(_) => {
-                    return Err(AlpacaError::from_msg(
-                        ErrorType::InvalidOperation,
-                        "Can't guide while slewing".to_string(),
-                    ))
-                }
-                MotionState::Tracking(TrackingState::Stationary(true)) => {
-                    return Err(AlpacaError::from_msg(
-                        ErrorType::InvalidWhileParked,
-                        "Can't guide while parked".to_string(),
-                    ))
-                }
-                MotionState::Tracking(TrackingState::Tracking(Some(_))) => {
-                    return Err(AlpacaError::from_msg(
-                        ErrorType::InvalidOperation,
-                        "Already guiding".to_string(),
-                    ))
-                }
-                MotionState::Tracking(TrackingState::Stationary(false)) => {
-                    (0., TrackingState::Stationary(false))
-                }
-                MotionState::Tracking(TrackingState::Tracking(None)) => {
-                    (state.tracking_rate.as_deg(), TrackingState::Tracking(None))
-                }
-            };
-
-            let new_motion_rate = Self::tracking_rate_with_guiding(
-                tracking_rate,
-                state.autoguide_speed,
-                guide_direction,
-            );
-            driver.set_motion_rate_degrees(RA_CHANNEL, new_motion_rate, false)?;
-            state_to_restore
+        let mut state = self.state.write().await;
+        let (tracking_rate, state_to_restore) = match &state.motion_state {
+            MotionState::Slewing(_) => {
+                return Err(AlpacaError::from_msg(
+                    ErrorType::InvalidOperation,
+                    "Can't guide while slewing".to_string(),
+                ))
+            }
+            MotionState::Tracking(TrackingState::Stationary(true)) => {
+                return Err(AlpacaError::from_msg(
+                    ErrorType::InvalidWhileParked,
+                    "Can't guide while parked".to_string(),
+                ))
+            }
+            MotionState::Tracking(TrackingState::Tracking(Some(_))) => {
+                return Err(AlpacaError::from_msg(
+                    ErrorType::InvalidOperation,
+                    "Already guiding".to_string(),
+                ))
+            }
+            MotionState::Tracking(TrackingState::Stationary(false)) => {
+                (0., TrackingState::Stationary(false))
+            }
+            MotionState::Tracking(TrackingState::Tracking(None)) => {
+                (state.tracking_rate.as_deg(), TrackingState::Tracking(None))
+            }
         };
 
-        let state_arc = Arc::clone(&self.state);
-        let driver_arc = Arc::clone(&self.driver);
+        let new_motion_rate =
+            Self::tracking_rate_with_guiding(tracking_rate, state.autoguide_speed, guide_direction);
 
-        let guide_task = task::spawn(async move {
-            sleep(Duration::from_millis(duration as u64)).await;
+        let driver_clone = self.driver.clone();
+        task::spawn_blocking(move || {
+            let mut driver = driver_clone.lock().unwrap();
+            driver.set_motion_rate_degrees(RA_CHANNEL, new_motion_rate, false)
+        })
+        .await
+        .unwrap()?;
 
-            let mut state = state_arc.write().unwrap();
-            let mut driver = driver_arc.lock().unwrap();
-            Self::restore_tracking_state(&mut driver, &mut state, state_to_restore)?;
-            Ok(())
+        let state_clone = self.state.clone();
+        let driver_clone = self.driver.clone();
+
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+
+        /* Start task that will stop guiding when it's done */
+        let _guide_task = task::spawn(async move {
+            tokio::select! {
+                _ = sleep(Duration::from_millis(duration as u64)) => {
+                    let mut state = state_clone.write().await;
+
+                    let latitude = state.observation_location.latitude;
+                    let tracking_rate = state.tracking_rate.as_deg();
+                    let running = match state_to_restore {
+                        TrackingState::Tracking(_) => true,
+                        TrackingState::Stationary(_) => false,
+                    };
+
+                    task::spawn_blocking(move || {
+                        let mut driver = driver_clone.lock().unwrap();
+                        driver.set_motion_mode(
+                            RA_CHANNEL,
+                            DriveMode::Tracking,
+                            false,
+                            Self::get_tracking_direction(latitude),
+                        )?;
+                        driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
+
+                        if running {
+                            driver.start_motion(RA_CHANNEL)
+                        } else {
+                            driver.stop_motion(RA_CHANNEL, false)
+                        }
+                    })
+                    .await
+                    .unwrap()?;
+
+                    state.motion_state = MotionState::Tracking(state_to_restore);
+
+                    Ok(())
+                },
+                _ = cancel_rx.changed() => Err(AlpacaError::from_msg(ErrorType::InvalidOperation, "Cancelled".to_string())),
+            }
         });
 
-        state.motion_state = MotionState::Tracking(TrackingState::Tracking(Some(guide_task)));
+        state.motion_state = MotionState::Tracking(TrackingState::Tracking(Some(cancel_tx)));
         Ok(())
     }
 
     /// True if a PulseGuide(GuideDirections, Int32) command is in progress, False otherwise
-    pub fn is_pulse_guiding(&self) -> Result<bool> {
-        let state = self.state.read().unwrap();
+    pub async fn is_pulse_guiding(&self) -> Result<bool> {
+        let state = self.state.read().await;
         Ok(match &state.motion_state {
             MotionState::Tracking(TrackingState::Tracking(guide_task)) => guide_task.is_some(),
             _ => false,

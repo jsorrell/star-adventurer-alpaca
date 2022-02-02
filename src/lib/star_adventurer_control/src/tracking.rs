@@ -1,9 +1,8 @@
 use crate::astro_math::Degrees;
 use crate::errors::{AlpacaError, ErrorType, Result};
-use crate::{MotionState, StarAdventurer, State, TrackingRate, TrackingState, RA_CHANNEL};
-use std::sync::MutexGuard;
-use synscan::motors::{Direction, DriveMode};
-use synscan::MotorController;
+use crate::{MotionState, StarAdventurer, TrackingRate, TrackingState, RA_CHANNEL};
+use synscan::motors::Direction;
+use tokio::task;
 
 impl StarAdventurer {
     /// True if the Tracking property can be changed, turning telescope sidereal tracking on and off.
@@ -13,7 +12,7 @@ impl StarAdventurer {
 
     #[inline]
     pub(crate) fn get_tracking_direction(latitude: Degrees) -> Direction {
-        if 0. <= latitude {
+        if Self::in_north(latitude) {
             Direction::Clockwise
         } else {
             Direction::CounterClockwise
@@ -31,8 +30,7 @@ impl StarAdventurer {
     }
 
     /// Sets the right ascension tracking rate (arcseconds per second)
-    pub fn set_ra_rate(&mut self, rate: f64) -> Result<()> {
-        todo!();
+    pub fn set_ra_rate(&mut self, _rate: f64) -> Result<()> {
         Err(AlpacaError::from_msg(
             ErrorType::InvalidOperation,
             "Setting RA tracking rate is not supported".to_string(),
@@ -68,21 +66,28 @@ impl StarAdventurer {
     }
 
     /// The current tracking rate of the telescope's sidereal drive.
-    pub fn get_tracking_rate(&mut self) -> Result<TrackingRate> {
-        Ok(self.state.read().unwrap().tracking_rate)
+    pub async fn get_tracking_rate(&mut self) -> Result<TrackingRate> {
+        Ok(self.state.read().await.tracking_rate)
     }
 
     /// Sets the tracking rate of the telescope's sidereal drive
-    pub fn set_tracking_rate(&mut self, tracking_rate: TrackingRate) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn set_tracking_rate(&mut self, tracking_rate: TrackingRate) -> Result<()> {
+        let mut state = self.state.write().await;
         state.tracking_rate = tracking_rate;
         match &state.motion_state {
             MotionState::Tracking(TrackingState::Tracking(guiding)) => {
-                if guiding.is_some() {
-                    // TODO stop guiding
+                match guiding {
+                    Some(t) => t.send(true).unwrap(),
+                    None => (),
                 }
-                let mut driver = self.driver.lock().unwrap();
-                driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate.as_deg(), false)?;
+                let driver_clone = self.driver.clone();
+                task::spawn_blocking(move || {
+                    let mut driver = driver_clone.lock().unwrap();
+                    driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate.as_deg(), false)?;
+                    Result::Ok(())
+                })
+                .await
+                .unwrap()?;
             }
             _ => (),
         };
@@ -92,8 +97,8 @@ impl StarAdventurer {
 
     /// Returns the state of the telescope's sidereal tracking drive.
     /// TODO is it tracking while goto? Going with no for now
-    pub fn is_tracking(&self) -> Result<bool> {
-        Ok(match self.state.read().unwrap().motion_state {
+    pub async fn is_tracking(&self) -> Result<bool> {
+        Ok(match self.state.read().await.motion_state {
             MotionState::Tracking(TrackingState::Tracking(_)) => true,
             _ => false,
         })
@@ -103,24 +108,38 @@ impl StarAdventurer {
     /// TODO does setting tracking to true stop gotos?
     /// TODO Does it change what they'll do when the gotos are over?
     /// TODO Going with can only set it while not gotoing
-    pub fn set_is_tracking(&mut self, should_track: bool) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn set_is_tracking(&mut self, should_track: bool) -> Result<()> {
+        let mut state = self.state.write().await;
         match (&state.motion_state, should_track) {
             (MotionState::Tracking(TrackingState::Tracking(guiding)), false) => {
-                // TODO stop guider thread
-                if guiding.is_some() {
-                    todo!();
-                }
-                self.driver.lock().unwrap().stop_motion(RA_CHANNEL, false)?;
+                match guiding {
+                    Some(t) => t.send(true).unwrap(),
+                    None => (),
+                };
+
+                let driver_clone = self.driver.clone();
+
+                task::spawn_blocking(move || {
+                    driver_clone.lock().unwrap().stop_motion(RA_CHANNEL, false)
+                })
+                .await
+                .unwrap()?;
+
                 state.motion_state = MotionState::Tracking(TrackingState::Stationary(false));
                 Ok(())
             }
             (MotionState::Tracking(TrackingState::Stationary(false)), true) => {
                 let tracking_rate = state.tracking_rate.as_deg();
-                let mut driver = self.driver.lock().unwrap();
-                // direction and mode should already be set
-                driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
-                driver.start_motion(RA_CHANNEL)?;
+
+                let driver_clone = self.driver.clone();
+                task::spawn_blocking(move || {
+                    let mut driver = driver_clone.lock().unwrap();
+                    // direction and mode should already be set
+                    driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
+                    driver.start_motion(RA_CHANNEL)
+                })
+                .await
+                .unwrap()?;
                 state.motion_state = MotionState::Tracking(TrackingState::Tracking(None));
                 Ok(())
             }
@@ -136,28 +155,5 @@ impl StarAdventurer {
             )),
             _ => Ok(()),
         }
-    }
-
-    pub(crate) fn restore_tracking_state(
-        driver: &mut MutexGuard<MotorController>,
-        state: &mut std::sync::RwLockWriteGuard<'_, State>,
-        state_to_restore: TrackingState,
-    ) -> Result<()> {
-        driver.set_motion_mode(
-            RA_CHANNEL,
-            DriveMode::Tracking,
-            false,
-            Self::get_tracking_direction(state.latitude),
-        )?;
-        driver.set_motion_rate_degrees(RA_CHANNEL, state.tracking_rate.as_deg(), false)?;
-
-        match state_to_restore {
-            TrackingState::Tracking(_) => driver.start_motion(RA_CHANNEL)?,
-            TrackingState::Stationary(_) => driver.stop_motion(RA_CHANNEL, false)?,
-        };
-
-        state.motion_state = MotionState::Tracking(state_to_restore);
-
-        Ok(())
     }
 }

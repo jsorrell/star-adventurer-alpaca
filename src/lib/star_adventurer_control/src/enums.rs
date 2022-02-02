@@ -1,7 +1,6 @@
-use crate::errors::Result;
 use crate::Degrees;
 use crate::TrackingRate::{King, Lunar, Sidereal, Solar};
-use tokio::task::JoinHandle;
+use tokio::sync::watch;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum AlignmentMode {
@@ -95,6 +94,8 @@ pub enum GuideDirection {
     West,
 }
 
+pub(crate) type TaskCanceller = watch::Sender<bool>;
+
 #[derive(Debug)]
 pub enum MotionState {
     Tracking(TrackingState),
@@ -104,7 +105,7 @@ pub enum MotionState {
 #[derive(Debug)]
 pub enum SlewingState {
     ManualSlewing(TrackingState),
-    GotoSlewing(f64, TrackingState, JoinHandle<Result<()>>), // ra channel target
+    GotoSlewing(Degrees, TrackingState, TaskCanceller), // ra channel target
 }
 
 impl SlewingState {
@@ -124,8 +125,8 @@ impl SlewingState {
 
 #[derive(Debug)]
 pub enum TrackingState {
-    Stationary(bool),                         // bool for parked
-    Tracking(Option<JoinHandle<Result<()>>>), // guiding task
+    Stationary(bool),                // bool for parked
+    Tracking(Option<TaskCanceller>), // guiding task
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]

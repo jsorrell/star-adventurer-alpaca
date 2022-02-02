@@ -2,38 +2,86 @@ use crate::astro_math::{Degrees, Hours};
 use crate::enums::*;
 use crate::errors::{AlpacaError, ErrorType, Result};
 use crate::{astro_math, MotionState, SlewingState, StarAdventurer, State, RA_CHANNEL};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use synscan::motors::{Direction, DriveMode};
 use synscan::MotorController;
-use tokio::task;
-use tokio::time::sleep;
+use tokio::sync::{watch, RwLock, RwLockWriteGuard};
+use tokio::{task, time};
 
 impl StarAdventurer {
     /// True if telescope is currently moving in response to one of the Slew methods or the MoveAxis(TelescopeAxes, Double) method
     /// False at all other times.
-    pub fn is_slewing(&self) -> Result<bool> {
-        Ok(match self.state.read().unwrap().motion_state {
+    pub async fn is_slewing(&self) -> Result<bool> {
+        Ok(match self.state.read().await.motion_state {
             MotionState::Slewing(_) => true,
             _ => false,
         })
     }
 
     /// Returns the post-slew settling time (sec.)
-    pub fn get_slew_settle_time(&self) -> Result<f64> {
+    pub async fn get_slew_settle_time(&self) -> Result<f64> {
         // TODO use this
-        Ok(self.state.read().unwrap().post_slew_settle_time)
+        Ok(self.state.read().await.post_slew_settle_time)
     }
 
     /// Sets the post-slew settling time (integer sec.).
-    pub fn set_slew_settle_time(&mut self, time: f64) -> Result<()> {
-        self.state.write().unwrap().post_slew_settle_time = time;
+    pub async fn set_slew_settle_time(&mut self, time: f64) -> Result<()> {
+        self.state.write().await.post_slew_settle_time = time;
         Ok(())
     }
 
-    /// Immediately Stops a slew in progress.
-    pub fn abort_slew(&mut self) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub(crate) async fn restore_state<'a, F>(
+        state_to_restore: TrackingState,
+        state: &mut RwLockWriteGuard<'a, State>,
+        driver: &Arc<Mutex<MotorController<'static>>>,
+        determinant: F,
+    ) -> Result<bool>
+    where
+        F: FnOnce(&mut MutexGuard<MotorController>) -> Result<bool> + Send + 'static,
+    {
+        let start_motion = match state_to_restore {
+            TrackingState::Tracking(_) => true,
+            TrackingState::Stationary(_) => false,
+        };
+        let tracking_rate = state.tracking_rate.as_deg();
+        let tracking_direction = Self::get_tracking_direction(state.observation_location.latitude);
+
+        let driver_clone = driver.clone();
+
+        let did_restore = task::spawn_blocking(move || {
+            let mut driver = driver_clone.lock().unwrap();
+            if determinant(&mut driver)? {
+                driver.set_motion_mode(
+                    RA_CHANNEL,
+                    DriveMode::Tracking,
+                    false,
+                    tracking_direction,
+                )?;
+                driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
+                if start_motion {
+                    driver.start_motion(RA_CHANNEL)?;
+                } else {
+                    driver.stop_motion(RA_CHANNEL, false)?;
+                }
+                return Result::Ok(true);
+            }
+            Ok(false)
+        })
+        .await
+        .unwrap()?;
+
+        if did_restore {
+            state.motion_state = MotionState::Tracking(state_to_restore);
+        }
+
+        Ok(did_restore)
+    }
+
+    async fn abort_slew_with_locks(
+        state: &mut RwLockWriteGuard<'_, State>,
+        driver: &Arc<Mutex<MotorController<'static>>>,
+    ) -> Result<()> {
         match &state.motion_state {
             MotionState::Tracking(_) => Err(AlpacaError::from_msg(
                 ErrorType::InvalidOperation,
@@ -41,21 +89,23 @@ impl StarAdventurer {
             )),
             MotionState::Slewing(slewing_state) => {
                 match slewing_state {
-                    SlewingState::GotoSlewing(_, _, goto_task) => {
-                        goto_task.abort();
+                    SlewingState::GotoSlewing(_, _, task_canceller) => {
+                        task_canceller.send(true).unwrap()
                     }
                     _ => (),
                 };
 
-                let mut driver = self.driver.lock().unwrap();
-                driver.stop_motion(RA_CHANNEL, false)?;
-
-                let prev_state = slewing_state.get_state_to_restore();
-
-                Self::restore_tracking_state(&mut driver, &mut state, prev_state)?;
+                let state_to_restore = slewing_state.get_state_to_restore();
+                Self::restore_state(state_to_restore, state, driver, |_| Ok(true)).await?;
                 Ok(())
             }
         }
+    }
+
+    /// Immediately Stops a slew in progress.
+    pub async fn abort_slew(&mut self) -> Result<()> {
+        let mut state = self.state.write().await;
+        Self::abort_slew_with_locks(&mut state, &self.driver).await
     }
 
     /// The rates at which the telescope may be moved about the specified axis by the MoveAxis(TelescopeAxes, Double) method.
@@ -76,9 +126,13 @@ impl StarAdventurer {
     }
 
     /// Predicts the pointing state that a German equatorial mount will be in if it slews to the given coordinates
-    pub fn predict_destination_side_of_pier(&self, _ra: Hours, _dec: Degrees) -> Result<PierSide> {
+    pub async fn predict_destination_side_of_pier(
+        &self,
+        _ra: Hours,
+        _dec: Degrees,
+    ) -> Result<PierSide> {
         // TODO pier side stuff
-        Ok(self.state.read().unwrap().pier_side)
+        Ok(self.state.read().await.pier_side)
     }
 
     /// True if this telescope is capable of programmed finding its home position (FindHome() method).
@@ -97,7 +151,7 @@ impl StarAdventurer {
     /// Move the telescope in one axis at the given rate.
     /// Rate in deg/sec
     /// TODO Does this stop other slewing? Returning an error for now
-    pub fn move_axis(&mut self, axis: Axis, rate: Degrees) -> Result<()> {
+    pub async fn move_axis(&mut self, axis: Axis, rate: Degrees) -> Result<()> {
         if axis != Axis::Primary {
             return Err(AlpacaError::from_msg(
                 ErrorType::ActionNotImplemented,
@@ -115,13 +169,11 @@ impl StarAdventurer {
             ));
         }
 
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().await;
         match &state.motion_state {
             MotionState::Slewing(slewing_state) => match (slewing_state, rate == 0.) {
                 (SlewingState::ManualSlewing(_), true) => {
-                    std::mem::drop(state);
-                    self.abort_slew()?;
-                    Ok(())
+                    Self::abort_slew_with_locks(&mut state, &self.driver).await
                 }
                 _ => Err(AlpacaError::from_msg(
                     ErrorType::InvalidOperation,
@@ -130,8 +182,8 @@ impl StarAdventurer {
             },
             MotionState::Tracking(ts) => {
                 let prev_state = match ts {
-                    TrackingState::Tracking(Some(guiding_task)) => {
-                        guiding_task.abort();
+                    TrackingState::Tracking(Some(task_canceller)) => {
+                        task_canceller.send(true).unwrap();
                         TrackingState::Tracking(None)
                     }
                     TrackingState::Tracking(None) => TrackingState::Tracking(None),
@@ -144,7 +196,8 @@ impl StarAdventurer {
                     TrackingState::Stationary(false) => TrackingState::Stationary(false),
                 };
                 state.motion_state = MotionState::Slewing(SlewingState::ManualSlewing(prev_state));
-                let mut direction = Self::get_tracking_direction(state.latitude);
+                let mut direction =
+                    Self::get_tracking_direction(state.observation_location.latitude);
                 direction = if rate < 0. {
                     direction.opposite()
                 } else {
@@ -174,8 +227,8 @@ impl StarAdventurer {
                 ErrorType::InvalidWhileParked,
                 "Can't slew while parked".to_string(),
             )),
-            MotionState::Tracking(TrackingState::Tracking(Some(guiding_task))) => {
-                guiding_task.abort();
+            MotionState::Tracking(TrackingState::Tracking(Some(task_canceller))) => {
+                task_canceller.send(true).unwrap();
                 Ok(TrackingState::Tracking(None))
             }
             MotionState::Tracking(TrackingState::Tracking(None)) => {
@@ -187,30 +240,39 @@ impl StarAdventurer {
         }
     }
 
-    async fn goto_task(
+    pub(crate) async fn goto_task(
         state_arc: Arc<RwLock<State>>,
         driver_arc: Arc<Mutex<MotorController<'static>>>,
+        cancel_rx: watch::Receiver<bool>,
     ) -> Result<()> {
+        let mut interval = time::interval(Duration::from_millis(1000));
+
         loop {
-            {
-                let mut state = state_arc.write().unwrap();
-                let mut driver = driver_arc.lock().unwrap();
-                let status = driver.get_status(RA_CHANNEL)?;
-                println!("Checking");
-                if status.mode == DriveMode::Tracking {
-                    println!("done");
+            let mut cancel_rx = cancel_rx.clone();
+            // Check every second
+            tokio::select! {
+                // FIXME fix this error
+                _ = cancel_rx.changed() => return Err(AlpacaError::from_msg(ErrorType::InvalidOperation, "Cancelled".to_string())),
+                _ = interval.tick() => {
+                    let mut state = state_arc.write().await;
                     let slewing_state = match &state.motion_state {
                         MotionState::Slewing(slewing_state) => slewing_state,
                         _ => unreachable!(),
                     };
-                    let old_ts = slewing_state.get_state_to_restore();
-                    StarAdventurer::restore_tracking_state(&mut driver, &mut state, old_ts)?;
-                    return Ok(());
+                    let state_to_restore = slewing_state.get_state_to_restore();
+
+                    let did_restore =
+                        Self::restore_state(state_to_restore, &mut state, &driver_arc, |driver| {
+                            let status = driver.get_status(RA_CHANNEL)?;
+                            Ok(status.mode == DriveMode::Tracking)
+                        })
+                        .await?;
+
+                    if did_restore {
+                        return Ok(());
+                    }
                 }
             }
-            println!("Still going");
-
-            sleep(Duration::from_millis(1000)).await;
         }
     }
 
@@ -223,7 +285,7 @@ impl StarAdventurer {
         driver_lock: &mut MutexGuard<MotorController>,
         pos: Degrees,
         after_state: TrackingState,
-    ) -> Result<()> {
+    ) -> Result<task::JoinHandle<Result<()>>> {
         // Tell Driver to start slew
         driver_lock.stop_motion(RA_CHANNEL, false)?;
 
@@ -246,35 +308,16 @@ impl StarAdventurer {
         let driver_arc_clone = Arc::clone(&driver_arc);
 
         // Init goto task
-        let goto_task = task::spawn(Self::goto_task(state_arc_clone, driver_arc_clone));
-        // let goto_task = task::spawn(async move {
-        //     loop {
-        //         {
-        //             let mut state = state_arc_clone.write().unwrap();
-        //             let mut driver = driver_arc_clone.lock().unwrap();
-        //             let status = driver.get_status(RA_CHANNEL)?;
-        //             println!("Checking");
-        //             if status.mode == DriveMode::Tracking {
-        //                 println!("done");
-        //                 let slewing_state = match &state.motion_state {
-        //                     MotionState::Slewing(slewing_state) => slewing_state,
-        //                     _ => unreachable!(),
-        //                 };
-        //                 let old_ts = slewing_state.get_state_to_restore();
-        //                 StarAdventurer::restore_tracking_state(&mut driver, &mut state, old_ts)?;
-        //                 return Ok(())
-        //             }
-        //         }
-        //         println!("Still going");
-        //
-        //         sleep(Duration::from_millis(1000)).await;
-        //     }
-        // });
+        let (canceller, cancel_rx) = watch::channel::<bool>(false);
+        let goto_task = task::spawn(Self::goto_task(
+            state_arc_clone,
+            driver_arc_clone,
+            cancel_rx,
+        ));
 
         state_lock.motion_state =
-            MotionState::Slewing(SlewingState::GotoSlewing(pos, after_state, goto_task));
-
-        Ok(())
+            MotionState::Slewing(SlewingState::GotoSlewing(pos, after_state, canceller));
+        Ok(goto_task)
     }
 
     /// Slews to closest version of given angle relative to where it started
@@ -285,7 +328,7 @@ impl StarAdventurer {
         driver_lock: &mut MutexGuard<MotorController>,
         target_angle: Degrees,
         after_state: TrackingState,
-    ) -> Result<()> {
+    ) -> Result<task::JoinHandle<Result<()>>> {
         let cur_pos = driver_lock.get_pos(RA_CHANNEL)?;
         let cur_angle = astro_math::modulo(cur_pos, 360.);
 
@@ -330,7 +373,7 @@ impl StarAdventurer {
         driver_lock: &mut MutexGuard<MotorController>,
         hour_angle: Hours,
         after_state: TrackingState,
-    ) -> Result<()> {
+    ) -> Result<task::JoinHandle<Result<()>>> {
         let target_angle = astro_math::hours_to_deg(hour_angle - state_lock.hour_angle_offset);
         Self::slew_motor_to_angle(
             state_arc,
@@ -370,7 +413,10 @@ impl StarAdventurer {
         target_hour_angle: Hours,
         target_declination: Degrees,
         after_state: TrackingState,
-    ) -> Result<()> {
+    ) -> Result<task::JoinHandle<Result<()>>> {
+        Self::alert_user_to_change_declination(state_lock.declination, target_declination);
+        state_lock.declination = target_declination;
+
         Self::slew_motor_to_hour_angle(
             state_arc,
             state_lock,
@@ -378,41 +424,7 @@ impl StarAdventurer {
             driver_lock,
             target_hour_angle,
             after_state,
-        )?;
-        Self::alert_user_to_change_declination(state_lock.declination, target_declination);
-        state_lock.declination = target_declination;
-        Ok(())
-    }
-
-    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
-    pub fn can_slew_alt_az(&self) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// Move the telescope to the given local horizontal coordinates, return when slew is complete
-    pub fn slew_to_alt_az(&self, az: Degrees, alt: Degrees) {
-        todo!()
-    }
-
-    /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
-    pub fn can_slew_alt_az_async(&self) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// Move the telescope to the given local horizontal coordinates, return immediately after the slew starts.
-    /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub fn slew_to_alt_az_async(&self, az: Degrees, alt: Degrees) {
-        todo!()
-    }
-
-    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
-    pub fn can_slew(&self) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// Move the telescope to the given equatorial coordinates, return when slew is complete
-    pub fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) {
-        todo!()
+        )
     }
 
     fn slew_to_coordinates_with_locks(
@@ -423,10 +435,10 @@ impl StarAdventurer {
         ra: Hours,
         dec: Degrees,
         after_state: TrackingState,
-    ) -> Result<()> {
+    ) -> Result<task::JoinHandle<Result<()>>> {
         let hour_angle = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state_lock.date_offset),
-            state_lock.longitude,
+            state_lock.observation_location.longitude,
         ) - ra;
         Self::slew_to_hour_angle_and_dec(
             state_arc,
@@ -439,6 +451,32 @@ impl StarAdventurer {
         )
     }
 
+    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
+    pub fn can_slew(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Move the telescope to the given equatorial coordinates, return when slew is complete
+    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> Result<()> {
+        {
+            let mut state = self.state.write().await;
+            let mut driver = self.driver.lock().unwrap();
+            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+
+            Self::slew_to_coordinates_with_locks(
+                &self.state,
+                &mut state,
+                &self.driver,
+                &mut driver,
+                ra,
+                dec,
+                restore_state,
+            )?
+        }
+        .await
+        .unwrap()
+    }
+
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
     pub fn can_slew_async(&self) -> Result<bool> {
         Ok(true)
@@ -446,12 +484,12 @@ impl StarAdventurer {
 
     /// Move the telescope to the given equatorial coordinates, return immediately after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub fn slew_to_coordinates_async(&mut self, ra: Hours, dec: Degrees) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn slew_to_coordinates_async(&mut self, ra: Hours, dec: Degrees) -> Result<()> {
+        let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
 
-        Self::slew_to_coordinates_with_locks(
+        let _join_handle = Self::slew_to_coordinates_with_locks(
             &self.state,
             &mut state,
             &self.driver,
@@ -459,18 +497,95 @@ impl StarAdventurer {
             ra,
             dec,
             restore_state,
-        )
+        )?;
+        Ok(())
+    }
+
+    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
+    pub fn can_slew_alt_az(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Move the telescope to the given local horizontal coordinates, return when slew is complete
+    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> Result<()> {
+        {
+            let mut state = self.state.write().await;
+            let mut driver = self.driver.lock().unwrap();
+            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+
+            let (ha, dec) = astro_math::calculate_ha_dec_from_alt_az(
+                alt,
+                az,
+                state.observation_location.latitude,
+            );
+
+            Self::slew_to_hour_angle_and_dec(
+                &self.state,
+                &mut state,
+                &self.driver,
+                &mut driver,
+                ha,
+                dec,
+                restore_state,
+            )?
+        }
+        .await
+        .unwrap()
+    }
+
+    /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
+    pub fn can_slew_alt_az_async(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Move the telescope to the given local horizontal coordinates, return immediately after the slew starts.
+    /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
+    pub async fn slew_to_alt_az_async(&self, alt: Degrees, az: Degrees) -> Result<()> {
+        let mut state = self.state.write().await;
+        let mut driver = self.driver.lock().unwrap();
+        let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+
+        let (ha, dec) =
+            astro_math::calculate_ha_dec_from_alt_az(alt, az, state.observation_location.latitude);
+
+        let _join_handle = Self::slew_to_hour_angle_and_dec(
+            &self.state,
+            &mut state,
+            &self.driver,
+            &mut driver,
+            ha,
+            dec,
+            restore_state,
+        )?;
+        Ok(())
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
-    pub fn slew_to_target(&self) {
-        todo!()
+    pub async fn slew_to_target(&self) -> Result<()> {
+        {
+            let mut state = self.state.write().await;
+            let mut driver = self.driver.lock().unwrap();
+            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+            let ra = state.target.right_ascension;
+            let dec = state.target.declination;
+            Self::slew_to_coordinates_with_locks(
+                &self.state,
+                &mut state,
+                &self.driver,
+                &mut driver,
+                ra,
+                dec,
+                restore_state,
+            )?
+        }
+        .await
+        .unwrap()
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub fn slew_to_target_async(&mut self) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn slew_to_target_async(&mut self) -> Result<()> {
+        let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
         let ra = state.target.right_ascension;
@@ -483,6 +598,7 @@ impl StarAdventurer {
             ra,
             dec,
             restore_state,
-        )
+        )?;
+        Ok(())
     }
 }

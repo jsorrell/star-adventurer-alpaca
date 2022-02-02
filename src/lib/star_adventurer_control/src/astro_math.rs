@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 use chrono::{Datelike, Timelike};
 use polynomials::poly;
 use std::f64::consts::{PI, TAU};
@@ -85,7 +86,7 @@ pub fn calculate_greenwich_sidereal_time(time: chrono::DateTime<chrono::Utc>) ->
         1.3915817,
         -0.00000044,
         -0.000029956,
-        -0.0000000368
+        -0.0000000368,
     ];
     let jd_tt = jd_utc + ((LEAP_SECOND_TOTAL as f64 + 32.184) / 3600.) / 24.; // Hours
     let t = (jd_tt - 2451545.0) / 36525.; // years
@@ -112,29 +113,43 @@ pub fn calculate_hour_angle(
     longitude: Degrees,
     ra: Hours,
 ) -> Hours {
-    calculate_local_sidereal_time(time, longitude) - ra
+    modulo(calculate_local_sidereal_time(time, longitude) - ra, 24.)
 }
 
-pub fn calculate_alt_from_ha(ha: Hours, dec: Degrees, lat: Degrees) -> Degrees {
+pub fn calculate_alt_from_ha_dec(ha: Hours, dec: Degrees, lat: Degrees) -> Degrees {
+    let ha = hours_to_rad(ha);
     let dec = deg_to_rad(dec);
     let lat = deg_to_rad(lat);
     rad_to_deg((dec.sin() * lat.sin() + dec.cos() * lat.cos() * ha.cos()).asin())
 }
 
-pub fn calculate_az_from_ha(ha: Hours, dec: Degrees, lat: Degrees) -> Degrees {
+pub fn calculate_az_from_ha_dec(ha: Hours, dec: Degrees, lat: Degrees) -> Degrees {
+    let alt = deg_to_rad(calculate_alt_from_ha_dec(ha, dec, lat));
+    let ha = hours_to_rad(ha);
     let dec = deg_to_rad(dec);
-    let lat = deg_to_rad(lat);
 
-    let alt = calculate_alt_from_ha(ha, dec, lat);
-
-    let a = rad_to_deg(((dec.sin() - alt.sin() * lat.sin()) / (alt.cos() * lat.cos())).acos())
-        as Degrees;
-
-    if 0. < ha.sin() {
-        360. - a
+    let a = rad_to_deg((-ha.sin() * dec.cos() / alt.cos()).asin()) as Degrees;
+    if 0. < ha.cos() {
+        180. - a
     } else {
         a
     }
+}
+
+pub fn calculate_ha_dec_from_alt_az(alt: Degrees, az: Degrees, lat: Degrees) -> (Hours, Degrees) {
+    let alt_rad = deg_to_rad(alt);
+    let az_rad = deg_to_rad(az);
+    let lat_rad = deg_to_rad(lat);
+
+    let dec_rad = (lat_rad.sin() * alt_rad.sin() + lat_rad.cos() * alt_rad.cos() * az_rad.cos())
+        .asin() as Radians;
+
+    let ha_rad = (-az_rad.sin() * alt_rad.cos() / dec_rad.cos()).asin() as Radians;
+
+    let ha_hours = rad_to_hours(ha_rad);
+    let ha_hours = if az < 0. { 12. - ha_hours } else { ha_hours };
+
+    (modulo(ha_hours, 24.), rad_to_deg(dec_rad))
 }
 
 pub fn modulo(val: f64, base: f64) -> f64 {
@@ -145,6 +160,14 @@ pub fn modulo(val: f64, base: f64) -> f64 {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    struct TestPos {
+        ha: Hours,
+        dec: Degrees,
+        alt: Degrees,
+        az: Degrees,
+        lat: Degrees,
+    }
 
     #[test]
     fn test_deg_to_rad() {
@@ -249,6 +272,65 @@ mod tests {
             0.0219108930,
             1E-4
         );
+    }
+
+    #[test]
+    fn test_ha_dec_alt_az() {
+        let tests = [
+            TestPos {
+                ha: deg_to_hours(336.683),
+                dec: 19.1824,
+                lat: 43.07833,
+                alt: ms_to_dec(59, 05, 10.),
+                az: ms_to_dec(133, 18, 29.),
+            },
+            TestPos {
+                ha: deg_to_hours(54.382617),
+                dec: 36.466667,
+                lat: 52.5,
+                alt: 49.169122,
+                az: 269.14634,
+            },
+            TestPos {
+                ha: ms_to_dec(22, 03, 55.79),
+                dec: -ms_to_dec(26, 23, 11.1),
+                lat: ms_to_dec(37, 45, 3.),
+                alt: ms_to_dec(20, 19, 20.5),
+                az: ms_to_dec(152, 23, 39.3),
+            },
+        ];
+
+        test_calculate_alt_from_ha_dec(&tests);
+        test_calculate_az_from_ha_dec(&tests);
+        test_calculate_ha_dec_from_alt_az(&tests);
+    }
+
+    fn test_calculate_alt_from_ha_dec(tests: &[TestPos]) {
+        for test in tests {
+            assert_float_absolute_eq!(
+                calculate_alt_from_ha_dec(test.ha, test.dec, test.lat),
+                test.alt,
+                1E-3
+            );
+        }
+    }
+
+    fn test_calculate_az_from_ha_dec(tests: &[TestPos]) {
+        for test in tests {
+            assert_float_absolute_eq!(
+                calculate_az_from_ha_dec(test.ha, test.dec, test.lat),
+                test.az,
+                1E-3
+            );
+        }
+    }
+
+    fn test_calculate_ha_dec_from_alt_az(tests: &[TestPos]) {
+        for test in tests {
+            let (ha, dec) = calculate_ha_dec_from_alt_az(test.alt, test.az, test.lat);
+            assert_float_relative_eq!(ha, test.ha, 1E-3);
+            assert_float_absolute_eq!(dec, test.dec, 1E-3);
+        }
     }
 
     #[test]

@@ -16,31 +16,34 @@ pub mod target;
 pub mod tracking;
 
 use crate::astro_math::{Degrees, Hours};
-use crate::config::Config;
+use crate::config::{Config, TelescopeDetails};
 use crate::enums::{
     AlignmentMode, EquatorialCoordinateType, MotionState, PierSide, SlewingState, Target,
     TrackingRate, TrackingState,
 };
 use crate::errors::{AlpacaError, ErrorType, Result};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use synscan;
-use synscan::motors::{Direction, DriveMode};
+use synscan::motors::DriveMode;
 use synscan::util::{AutoGuideSpeed, SingleChannel};
-use synscan::MotorParameters;
+use tokio::sync::{watch, RwLock};
+use tokio::task;
 
 const RA_CHANNEL: &SingleChannel = &SingleChannel::Channel1;
 
 #[derive(Debug)]
 struct State {
-    latitude: Degrees,
-    longitude: Degrees,
-    elevation: f64,
-    park_pos: Degrees,
-    declination: Degrees,
-    hour_angle_offset: Hours, // pos+offset = ha
-    pier_side: PierSide,
+    observation_location: config::ObservingLocation,
     date_offset: chrono::Duration,
+
+    park_pos: Degrees,
+    // Pos
+    hour_angle_offset: Hours, // pos+offset = ha
+    declination: Degrees,
+
+    pier_side: PierSide,
+
     tracking_rate: TrackingRate,
     post_slew_settle_time: f64,
     target: Target,
@@ -50,27 +53,26 @@ struct State {
 
 pub struct StarAdventurer {
     driver: Arc<Mutex<synscan::MotorController<'static>>>,
-    motor_params: MotorParameters,
-    config: Config,
+    telescope_details: TelescopeDetails,
     state: Arc<RwLock<State>>,
 }
 
 impl StarAdventurer {
-    pub fn new(
-        path: &'static str,
-        baud_rate: u32,
-        timeout: Duration,
-        config: Config,
-    ) -> Result<Self> {
-        let mut driver = synscan::MotorController::new(path, baud_rate, timeout)?;
+    pub async fn new(config: &Config) -> Result<Self> {
+        let mut driver = synscan::MotorController::new(
+            config.com_settings.path.as_str(),
+            config.com_settings.baud_rate,
+            Duration::from_millis(config.com_settings.timeout_millis as u64),
+        )?;
         let motor_params = *driver.get_motor_parameters();
         let status = driver.get_status(RA_CHANNEL)?;
         let step_period = driver.get_step_period(RA_CHANNEL)?;
 
         let mut tracking_rate = TrackingRate::Sidereal;
-        let motion_state: MotionState;
+        let mut is_goto_slewing = false;
+        let mut goto_slewing_target = 0.;
 
-        match status.mode {
+        let motion_state = match status.mode {
             DriveMode::Tracking => {
                 match TrackingRate::determine_from_period(
                     step_period,
@@ -93,27 +95,21 @@ impl StarAdventurer {
                 };
 
                 if status.running {
-                    motion_state = MotionState::Tracking(TrackingState::Tracking(None))
+                    MotionState::Tracking(TrackingState::Tracking(None))
                 } else {
-                    motion_state = MotionState::Tracking(TrackingState::Stationary(false))
+                    MotionState::Tracking(TrackingState::Stationary(false))
                 }
             }
             DriveMode::Goto => {
                 if status.running {
-                    let target = driver.get_goto_target(RA_CHANNEL)?;
-                    // TODO spawn task to track goto
-                    motion_state = MotionState::Slewing(SlewingState::GotoSlewing(
-                        target,
-                        TrackingState::Stationary(false),
-                        todo!(),
-                    ))
+                    goto_slewing_target = driver.get_goto_target(RA_CHANNEL)?;
+                    is_goto_slewing = true;
+
+                    // placeholder until we have state object
+                    MotionState::Tracking(TrackingState::Stationary(false))
                 } else {
-                    motion_state = MotionState::Tracking(TrackingState::Stationary(false));
-                    let direction = if 0. < config.latitude {
-                        Direction::Clockwise
-                    } else {
-                        Direction::CounterClockwise
-                    };
+                    let direction =
+                        Self::get_tracking_direction(config.observation_location.latitude);
                     driver.set_motion_mode(RA_CHANNEL, DriveMode::Tracking, false, direction)?;
                     driver.set_step_period(
                         RA_CHANNEL,
@@ -122,16 +118,15 @@ impl StarAdventurer {
                             motor_params.get_counts_per_revolution(*RA_CHANNEL),
                         ),
                     )?;
+                    MotionState::Tracking(TrackingState::Stationary(false))
                 }
             }
-        }
+        };
 
         driver.set_autoguide_speed(RA_CHANNEL, AutoGuideSpeed::Half)?;
 
         let state = State {
-            latitude: config.latitude,
-            longitude: config.longitude,
-            elevation: config.elevation,
+            observation_location: config.observation_location,
             park_pos: 0.0, // TODO: Put an angular park pos in config (that only works after alignment)
             declination: 0.0, // Set only by sync or goto
             hour_angle_offset: 0.0, // Set only by sync or goto
@@ -143,11 +138,31 @@ impl StarAdventurer {
             tracking_rate,
             motion_state,
         };
+
+        let driver_arc = Arc::new(Mutex::new(driver));
+        let state_arc = Arc::new(RwLock::new(state));
+
+        // Spawn task to track goto position
+        if is_goto_slewing {
+            let state_arc_clone = state_arc.clone();
+            let mut state_lock = state_arc_clone.write().await;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let _goto_task = task::spawn(Self::goto_task(
+                state_arc.clone(),
+                driver_arc.clone(),
+                cancel_rx,
+            ));
+            state_lock.motion_state = MotionState::Slewing(SlewingState::GotoSlewing(
+                goto_slewing_target,
+                TrackingState::Stationary(false),
+                cancel_tx,
+            ));
+        }
+
         Ok(StarAdventurer {
-            driver: Arc::new(Mutex::new(driver)),
-            config,
-            state: Arc::new(RwLock::new(state)),
-            motor_params,
+            driver: driver_arc,
+            state: state_arc,
+            telescope_details: config.telescope_details,
         })
     }
 
@@ -163,7 +178,7 @@ impl StarAdventurer {
 
     /// The telescope's effective aperture diameter (meters)
     pub fn get_aperture(&self) -> Result<f64> {
-        self.config.aperture.ok_or(AlpacaError::from_msg(
+        self.telescope_details.aperture.ok_or(AlpacaError::from_msg(
             ErrorType::ValueNotSet,
             format!("Aperture not defined"),
         ))
@@ -171,18 +186,22 @@ impl StarAdventurer {
 
     /// The area of the telescope's aperture, taking into account any obstructions (square meters)
     pub fn get_aperture_area(&self) -> Result<f64> {
-        self.config.aperture_area.ok_or(AlpacaError::from_msg(
-            ErrorType::ValueNotSet,
-            format!("Aperture area not defined"),
-        ))
+        self.telescope_details
+            .aperture_area
+            .ok_or(AlpacaError::from_msg(
+                ErrorType::ValueNotSet,
+                format!("Aperture area not defined"),
+            ))
     }
 
     /// The telescope's focal length in meters
     pub fn get_focal_length(&self) -> Result<f64> {
-        self.config.focal_length.ok_or(AlpacaError::from_msg(
-            ErrorType::ValueNotSet,
-            format!("Focal length not defined"),
-        ))
+        self.telescope_details
+            .focal_length
+            .ok_or(AlpacaError::from_msg(
+                ErrorType::ValueNotSet,
+                format!("Focal length not defined"),
+            ))
     }
 
     /// True if the mount is stopped in the Home position. Set only following a FindHome() operation, and reset with any slew operation.
@@ -206,8 +225,8 @@ impl StarAdventurer {
     }
 
     /// Indicates the pointing state of the mount
-    pub fn get_side_of_pier(&self) -> Result<PierSide> {
-        Ok(self.state.read().unwrap().pier_side)
+    pub async fn get_side_of_pier(&self) -> Result<PierSide> {
+        Ok(self.state.read().await.pier_side)
     }
 
     /// True if the SideOfPier property can be set, meaning that the mount can be forced to flip.

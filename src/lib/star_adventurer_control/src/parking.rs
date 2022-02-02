@@ -14,8 +14,8 @@ impl StarAdventurer {
 
     /// True if the telescope has been put into the parked state by the seee Park() method.
     /// Set False by calling the Unpark() method.
-    pub fn is_parked(&self) -> Result<bool> {
-        Ok(match self.state.read().unwrap().motion_state {
+    pub async fn is_parked(&self) -> Result<bool> {
+        Ok(match self.state.read().await.motion_state {
             MotionState::Tracking(TrackingState::Stationary(true)) => true,
             _ => false,
         })
@@ -27,33 +27,35 @@ impl StarAdventurer {
     }
 
     /// Sets the telescope's park position to be its current position.
-    pub fn set_park_pos(&mut self) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn set_park_pos(&mut self) -> Result<()> {
+        let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         state.park_pos = driver.get_pos(RA_CHANNEL)?;
         Ok(())
     }
 
     /// Move the telescope to its park position, stop all motion (or restrict to a small safe range), and set AtPark to True.
-    pub fn park(&mut self) -> Result<()> {
-        let mut state = self.state.write().unwrap();
-        Self::check_current_state_for_slewing(&state.motion_state)?;
-        let mut driver = self.driver.lock().unwrap();
-        let park_pos = state.park_pos;
+    pub async fn park(&mut self) -> Result<()> {
+        {
+            let mut state = self.state.write().await;
+            Self::check_current_state_for_slewing(&state.motion_state)?;
+            let mut driver = self.driver.lock().unwrap();
+            let park_pos = state.park_pos;
 
-        Self::slew_motor_to_angle(
-            &self.state,
-            &mut state,
-            &self.driver,
-            &mut driver,
-            park_pos,
-            TrackingState::Stationary(true),
-        )
+            Self::slew_motor_to_angle(
+                &self.state,
+                &mut state,
+                &self.driver,
+                &mut driver,
+                park_pos,
+                TrackingState::Stationary(true),
+            )?
+        }.await.unwrap()
     }
 
     /// Takes telescope out of the Parked state.
-    pub fn unpark(&mut self) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    pub async fn unpark(&mut self) -> Result<()> {
+        let mut state = self.state.write().await;
         match state.motion_state {
             MotionState::Tracking(TrackingState::Stationary(true)) => {
                 state.motion_state = MotionState::Tracking(TrackingState::Stationary(false));

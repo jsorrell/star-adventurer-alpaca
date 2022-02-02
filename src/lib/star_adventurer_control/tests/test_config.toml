@@ -1,0 +1,14 @@
+[com_settings]
+path = '/dev/ttyUSB0'
+baud_rate = 115200
+timeout_millis = 50
+
+[observation_location]
+latitude = 51.47
+longitude = 0.0
+elevation = 15.0
+
+[telescope_details]
+aperture = 0.1
+aperture_area = 0.785
+focal_length = 0.500
