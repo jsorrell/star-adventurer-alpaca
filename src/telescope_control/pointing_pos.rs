@@ -1,6 +1,7 @@
+use crate::astro_math;
 use crate::astro_math::{Degrees, Hours};
-use crate::errors::Result;
-use crate::{astro_math, StarAdventurer, RA_CHANNEL};
+use crate::telescope_control::{StarAdventurer, RA_CHANNEL};
+use crate::util::result::AscomResult;
 use std::sync::MutexGuard;
 use synscan::MotorController;
 
@@ -8,7 +9,7 @@ impl StarAdventurer {
     fn get_hour_angle(
         driver: &mut MutexGuard<MotorController>,
         hour_angle_offset: Hours,
-    ) -> Result<Hours> {
+    ) -> AscomResult<Hours> {
         let unmoduloed_angle =
             astro_math::deg_to_hours(driver.get_pos(RA_CHANNEL)?) + hour_angle_offset;
         Ok(astro_math::modulo(unmoduloed_angle, 24.))
@@ -20,7 +21,7 @@ impl StarAdventurer {
 
     /// The right ascension (hours) of the mount's current equatorial coordinates,
     /// in the coordinate system given by the EquatorialSystem property
-    pub async fn get_ra(&mut self) -> Result<Hours> {
+    pub async fn get_ra(&self) -> AscomResult<Hours> {
         let state = self.state.read().await;
         let lst = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state.date_offset),
@@ -38,12 +39,12 @@ impl StarAdventurer {
 
     /// The declination (degrees) of the mount's current equatorial coordinates, in the coordinate system given by the EquatorialSystem property.
     /// Reading the property will raise an error if the value is unavailable.
-    pub async fn get_dec(&self) -> Result<Degrees> {
+    pub async fn get_dec(&self) -> AscomResult<Degrees> {
         Ok(self.state.read().await.declination)
     }
 
     /// The altitude above the local horizon of the mount's current position (degrees, positive up)
-    pub async fn get_altitude(&mut self) -> Result<Degrees> {
+    pub async fn get_altitude(&self) -> AscomResult<Degrees> {
         let state = self.state.read().await;
         let mut driver = self.driver.lock().unwrap();
 
@@ -57,7 +58,7 @@ impl StarAdventurer {
     }
 
     /// The azimuth at the local horizon of the mount's current position (degrees, North-referenced, positive East/clockwise).
-    pub async fn get_azimuth(&mut self) -> Result<f64> {
+    pub async fn get_azimuth(&self) -> AscomResult<f64> {
         let state = self.state.read().await;
         let mut driver = self.driver.lock().unwrap();
 

@@ -1,11 +1,4 @@
-extern crate core;
-#[macro_use]
-extern crate assert_float_eq;
-
-mod astro_math;
 pub mod config;
-pub mod enums;
-pub mod errors;
 pub mod guide;
 pub mod observing_pos;
 pub mod parking;
@@ -13,27 +6,26 @@ pub mod pointing_pos;
 pub mod slew;
 pub mod sync;
 pub mod target;
+pub(in crate::telescope_control) mod test_util;
 pub mod tracking;
 
-use crate::astro_math::{Degrees, Hours};
-use crate::config::{Config, TelescopeDetails};
-use crate::enums::{
-    AlignmentMode, EquatorialCoordinateType, MotionState, PierSide, SlewingState, Target,
-    TrackingRate, TrackingState,
-};
-use crate::errors::{AlpacaError, ErrorType, Result};
+use crate::util::enums::*;
+use crate::util::result::*;
+use config::{Config, TelescopeDetails};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use synscan;
 use synscan::motors::DriveMode;
+use synscan::result::SynScanError;
 use synscan::util::{AutoGuideSpeed, SingleChannel};
+use target::Target;
 use tokio::sync::{watch, RwLock};
 use tokio::task;
 
 const RA_CHANNEL: &SingleChannel = &SingleChannel::Channel1;
 
 #[derive(Debug)]
-struct State {
+pub(in crate::telescope_control) struct State {
     observation_location: config::ObservingLocation,
     date_offset: chrono::Duration,
 
@@ -58,7 +50,7 @@ pub struct StarAdventurer {
 }
 
 impl StarAdventurer {
-    pub async fn new(config: &Config) -> Result<Self> {
+    pub async fn new(config: &Config) -> AscomResult<Self> {
         let mut driver = synscan::MotorController::new(
             config.com_settings.path.as_str(),
             config.com_settings.baud_rate,
@@ -167,78 +159,89 @@ impl StarAdventurer {
     }
 
     /// Returns the alignment mode of the mount (Alt/Az, Polar, German Polar)
-    pub fn get_alignment_mode(&self) -> Result<AlignmentMode> {
+    pub async fn get_alignment_mode(&self) -> AscomResult<AlignmentMode> {
         return Ok(AlignmentMode::GermanPolar);
     }
 
     /// Returns the current equatorial coordinate system used by this telescope (e.g. Topocentric or J2000).
-    pub fn get_equatorial_system(&self) -> Result<EquatorialCoordinateType> {
+    pub async fn get_equatorial_system(&self) -> AscomResult<EquatorialCoordinateType> {
         Ok(EquatorialCoordinateType::Topocentric)
     }
 
     /// The telescope's effective aperture diameter (meters)
-    pub fn get_aperture(&self) -> Result<f64> {
-        self.telescope_details.aperture.ok_or(AlpacaError::from_msg(
-            ErrorType::ValueNotSet,
+    pub async fn get_aperture(&self) -> AscomResult<f64> {
+        self.telescope_details.aperture.ok_or(AscomError::from_msg(
+            AscomErrorType::ValueNotSet,
             format!("Aperture not defined"),
         ))
     }
 
     /// The area of the telescope's aperture, taking into account any obstructions (square meters)
-    pub fn get_aperture_area(&self) -> Result<f64> {
+    pub async fn get_aperture_area(&self) -> AscomResult<f64> {
         self.telescope_details
             .aperture_area
-            .ok_or(AlpacaError::from_msg(
-                ErrorType::ValueNotSet,
+            .ok_or(AscomError::from_msg(
+                AscomErrorType::ValueNotSet,
                 format!("Aperture area not defined"),
             ))
     }
 
     /// The telescope's focal length in meters
-    pub fn get_focal_length(&self) -> Result<f64> {
+    pub async fn get_focal_length(&self) -> AscomResult<f64> {
         self.telescope_details
             .focal_length
-            .ok_or(AlpacaError::from_msg(
-                ErrorType::ValueNotSet,
+            .ok_or(AscomError::from_msg(
+                AscomErrorType::ValueNotSet,
                 format!("Focal length not defined"),
             ))
     }
 
     /// True if the mount is stopped in the Home position. Set only following a FindHome() operation, and reset with any slew operation.
     /// This property must be False if the telescope does not support homing.
-    pub fn is_home(&self) -> Result<bool> {
+    pub async fn is_home(&self) -> AscomResult<bool> {
         Ok(false)
     }
 
     /// True if the telescope or driver applies atmospheric refraction to coordinates.
-    pub fn does_refraction(&self) -> Result<bool> {
+    pub async fn does_refraction(&self) -> AscomResult<bool> {
         Ok(false)
     }
 
     /// Tell the telescope or driver whether to apply atmospheric refraction to coordinates.
-    pub fn set_does_refraction(&mut self, _does_refraction: bool) -> Result<()> {
+    pub async fn set_does_refraction(&self, _does_refraction: bool) -> AscomResult<()> {
         // TODO implement these?
-        Err(AlpacaError::from_msg(
-            ErrorType::ActionNotImplemented,
+        Err(AscomError::from_msg(
+            AscomErrorType::ActionNotImplemented,
             format!("Refraction calculations not available"),
         ))
     }
 
     /// Indicates the pointing state of the mount
-    pub async fn get_side_of_pier(&self) -> Result<PierSide> {
+    pub async fn get_side_of_pier(&self) -> AscomResult<PierSide> {
         Ok(self.state.read().await.pier_side)
     }
 
     /// True if the SideOfPier property can be set, meaning that the mount can be forced to flip.
-    pub fn can_set_side_of_pier(&self) -> Result<bool> {
+    pub async fn can_set_side_of_pier(&self) -> AscomResult<bool> {
         Ok(false) // FIXME revisit
     }
 
     /// Sets the pointing state of the mount
-    pub fn set_side_of_pier(&self, _side: PierSide) -> Result<()> {
-        Err(AlpacaError::from_msg(
-            ErrorType::ActionNotImplemented,
+    pub async fn set_side_of_pier(&self, _side: PierSide) -> AscomResult<()> {
+        Err(AscomError::from_msg(
+            AscomErrorType::ActionNotImplemented,
             format!("Side of pier control not implemented"),
         ))
+    }
+
+    pub async fn is_connected(&self) -> AscomResult<bool> {
+        let _state = self.state.read().await;
+        let mut driver = self.driver.lock().unwrap();
+
+        match driver.test_com() {
+            Ok(()) => Ok(true),
+            Err(SynScanError::CommunicationError(_)) => Ok(false),
+            Err(e) => Err(AscomError::from(e)),
+        }
     }
 }

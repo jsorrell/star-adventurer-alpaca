@@ -3,10 +3,10 @@ use std::fmt::{Display, Formatter};
 use std::{fmt, result};
 use synscan::result::SynScanError;
 
-pub type Result<T> = result::Result<T, AlpacaError>;
+pub type AscomResult<T> = result::Result<T, AscomError>;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum ErrorType {
+pub enum AscomErrorType {
     PropertyOrMethodNotImplemented = 0x400,
     InvalidValue = 0x401,
     ValueNotSet = 0x402,
@@ -18,21 +18,21 @@ pub enum ErrorType {
 }
 
 #[derive(Debug)]
-pub struct AlpacaError {
-    error_number: i32,
-    error_message: String,
+pub struct AscomError {
+    pub error_number: i32,
+    pub error_message: String,
 }
 
-impl AlpacaError {
-    pub fn from_msg(e_type: ErrorType, message: String) -> AlpacaError {
-        AlpacaError {
+impl AscomError {
+    pub fn from_msg(e_type: AscomErrorType, message: String) -> AscomError {
+        AscomError {
             error_number: e_type as i32,
             error_message: message,
         }
     }
 }
 
-impl From<SynScanError> for AlpacaError {
+impl From<SynScanError> for AscomError {
     fn from(e: SynScanError) -> Self {
         Self {
             error_number: match e {
@@ -51,10 +51,10 @@ impl From<SynScanError> for AlpacaError {
     }
 }
 
-impl Display for AlpacaError {
+impl Display for AscomError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.error_number, self.error_message)
     }
 }
 
-impl Error for AlpacaError {}
+impl Error for AscomError {}

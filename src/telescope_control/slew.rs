@@ -1,7 +1,8 @@
 use crate::astro_math::{Degrees, Hours};
-use crate::enums::*;
-use crate::errors::{AlpacaError, ErrorType, Result};
-use crate::{astro_math, MotionState, SlewingState, StarAdventurer, State, RA_CHANNEL};
+use crate::telescope_control::{StarAdventurer, State, RA_CHANNEL};
+use crate::util::enums::*;
+use crate::util::result::*;
+use crate::{astro_math, AxisRate};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use synscan::motors::{Direction, DriveMode};
@@ -12,7 +13,7 @@ use tokio::{task, time};
 impl StarAdventurer {
     /// True if telescope is currently moving in response to one of the Slew methods or the MoveAxis(TelescopeAxes, Double) method
     /// False at all other times.
-    pub async fn is_slewing(&self) -> Result<bool> {
+    pub async fn is_slewing(&self) -> AscomResult<bool> {
         Ok(match self.state.read().await.motion_state {
             MotionState::Slewing(_) => true,
             _ => false,
@@ -20,25 +21,25 @@ impl StarAdventurer {
     }
 
     /// Returns the post-slew settling time (sec.)
-    pub async fn get_slew_settle_time(&self) -> Result<f64> {
+    pub async fn get_slew_settle_time(&self) -> AscomResult<f64> {
         // TODO use this
         Ok(self.state.read().await.post_slew_settle_time)
     }
 
     /// Sets the post-slew settling time (integer sec.).
-    pub async fn set_slew_settle_time(&mut self, time: f64) -> Result<()> {
+    pub async fn set_slew_settle_time(&self, time: f64) -> AscomResult<()> {
         self.state.write().await.post_slew_settle_time = time;
         Ok(())
     }
 
-    pub(crate) async fn restore_state<'a, F>(
+    pub(in crate::telescope_control) async fn restore_state<'a, F>(
         state_to_restore: TrackingState,
         state: &mut RwLockWriteGuard<'a, State>,
         driver: &Arc<Mutex<MotorController<'static>>>,
         determinant: F,
-    ) -> Result<bool>
+    ) -> AscomResult<bool>
     where
-        F: FnOnce(&mut MutexGuard<MotorController>) -> Result<bool> + Send + 'static,
+        F: FnOnce(&mut MutexGuard<MotorController>) -> AscomResult<bool> + Send + 'static,
     {
         let start_motion = match state_to_restore {
             TrackingState::Tracking(_) => true,
@@ -64,7 +65,7 @@ impl StarAdventurer {
                 } else {
                     driver.stop_motion(RA_CHANNEL, false)?;
                 }
-                return Result::Ok(true);
+                return AscomResult::Ok(true);
             }
             Ok(false)
         })
@@ -81,10 +82,10 @@ impl StarAdventurer {
     async fn abort_slew_with_locks(
         state: &mut RwLockWriteGuard<'_, State>,
         driver: &Arc<Mutex<MotorController<'static>>>,
-    ) -> Result<()> {
+    ) -> AscomResult<()> {
         match &state.motion_state {
-            MotionState::Tracking(_) => Err(AlpacaError::from_msg(
-                ErrorType::InvalidOperation,
+            MotionState::Tracking(_) => Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
                 "Not slewing".to_string(),
             )),
             MotionState::Slewing(slewing_state) => {
@@ -103,25 +104,28 @@ impl StarAdventurer {
     }
 
     /// Immediately Stops a slew in progress.
-    pub async fn abort_slew(&mut self) -> Result<()> {
+    pub async fn abort_slew(&self) -> AscomResult<()> {
         let mut state = self.state.write().await;
         Self::abort_slew_with_locks(&mut state, &self.driver).await
     }
 
     /// The rates at which the telescope may be moved about the specified axis by the MoveAxis(TelescopeAxes, Double) method.
-    pub fn get_axis_rates(&self, axis: Axis) -> Result<Vec<(f64, f64)>> {
+    pub async fn get_axis_rates(&self, axis: Axis) -> AscomResult<Vec<AxisRate>> {
         if axis != Axis::Primary {
-            return Err(AlpacaError::from_msg(
-                ErrorType::InvalidOperation,
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
                 "Can only slew around primary axis".to_string(),
             ));
         }
         // experimentally, 1_103 to 16_000_000 for period
-        Ok(vec![(0.000029, 0.418032)])
+        Ok(vec![AxisRate {
+            minimum: 0.000029,
+            maximum: 0.418032,
+        }])
     }
 
     /// True if this telescope can move the requested axis.
-    pub fn can_move_axis(&self, axis: Axis) -> Result<bool> {
+    pub async fn can_move_axis(&self, axis: Axis) -> AscomResult<bool> {
         Ok(axis == Axis::Primary)
     }
 
@@ -130,20 +134,20 @@ impl StarAdventurer {
         &self,
         _ra: Hours,
         _dec: Degrees,
-    ) -> Result<PierSide> {
+    ) -> AscomResult<PierSide> {
         // TODO pier side stuff
         Ok(self.state.read().await.pier_side)
     }
 
     /// True if this telescope is capable of programmed finding its home position (FindHome() method).
-    pub fn can_find_home(&self) -> Result<bool> {
+    pub async fn can_find_home(&self) -> AscomResult<bool> {
         Ok(false)
     }
 
     /// Locates the telescope's "home" position (synchronous)
-    pub fn find_home(&self) -> Result<()> {
-        Err(AlpacaError::from_msg(
-            ErrorType::ActionNotImplemented,
+    pub async fn find_home(&self) -> AscomResult<()> {
+        Err(AscomError::from_msg(
+            AscomErrorType::ActionNotImplemented,
             format!("Home is not implemented"),
         ))
     }
@@ -151,20 +155,20 @@ impl StarAdventurer {
     /// Move the telescope in one axis at the given rate.
     /// Rate in deg/sec
     /// TODO Does this stop other slewing? Returning an error for now
-    pub async fn move_axis(&mut self, axis: Axis, rate: Degrees) -> Result<()> {
+    pub async fn move_axis(&self, axis: Axis, rate: Degrees) -> AscomResult<()> {
         if axis != Axis::Primary {
-            return Err(AlpacaError::from_msg(
-                ErrorType::ActionNotImplemented,
+            return Err(AscomError::from_msg(
+                AscomErrorType::ActionNotImplemented,
                 format!("Can only slew on primary axis"),
             ));
         }
 
-        if rate == 0.
-            || rate < self.get_axis_rates(axis).unwrap()[0].0
-            || self.get_axis_rates(axis).unwrap()[0].1 < rate
+        if rate != 0.
+            && (rate < self.get_axis_rates(axis).await.unwrap()[0].minimum
+                || self.get_axis_rates(axis).await.unwrap()[0].maximum < rate)
         {
-            return Err(AlpacaError::from_msg(
-                ErrorType::InvalidValue,
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
                 format!("Rate is invalid"),
             ));
         }
@@ -175,8 +179,8 @@ impl StarAdventurer {
                 (SlewingState::ManualSlewing(_), true) => {
                     Self::abort_slew_with_locks(&mut state, &self.driver).await
                 }
-                _ => Err(AlpacaError::from_msg(
-                    ErrorType::InvalidOperation,
+                _ => Err(AscomError::from_msg(
+                    AscomErrorType::InvalidOperation,
                     "Already slewing".to_string(),
                 )),
             },
@@ -188,8 +192,8 @@ impl StarAdventurer {
                     }
                     TrackingState::Tracking(None) => TrackingState::Tracking(None),
                     TrackingState::Stationary(true) => {
-                        return Err(AlpacaError::from_msg(
-                            ErrorType::InvalidWhileParked,
+                        return Err(AscomError::from_msg(
+                            AscomErrorType::InvalidWhileParked,
                             "Can't slew while parked".to_string(),
                         ))
                     }
@@ -217,14 +221,14 @@ impl StarAdventurer {
     /// Returns the state that should be restored when done
     pub(crate) fn check_current_state_for_slewing(
         motion_state: &MotionState,
-    ) -> Result<TrackingState> {
+    ) -> AscomResult<TrackingState> {
         match &motion_state {
-            MotionState::Slewing(_) => Err(AlpacaError::from_msg(
-                ErrorType::InvalidOperation,
+            MotionState::Slewing(_) => Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
                 "Already slewing".to_string(),
             )),
-            MotionState::Tracking(TrackingState::Stationary(true)) => Err(AlpacaError::from_msg(
-                ErrorType::InvalidWhileParked,
+            MotionState::Tracking(TrackingState::Stationary(true)) => Err(AscomError::from_msg(
+                AscomErrorType::InvalidWhileParked,
                 "Can't slew while parked".to_string(),
             )),
             MotionState::Tracking(TrackingState::Tracking(Some(task_canceller))) => {
@@ -240,11 +244,11 @@ impl StarAdventurer {
         }
     }
 
-    pub(crate) async fn goto_task(
+    pub(in crate::telescope_control) async fn goto_task(
         state_arc: Arc<RwLock<State>>,
         driver_arc: Arc<Mutex<MotorController<'static>>>,
         cancel_rx: watch::Receiver<bool>,
-    ) -> Result<()> {
+    ) -> AscomResult<()> {
         let mut interval = time::interval(Duration::from_millis(1000));
 
         loop {
@@ -252,7 +256,7 @@ impl StarAdventurer {
             // Check every second
             tokio::select! {
                 // FIXME fix this error
-                _ = cancel_rx.changed() => return Err(AlpacaError::from_msg(ErrorType::InvalidOperation, "Cancelled".to_string())),
+                _ = cancel_rx.changed() => return Err(AscomError::from_msg(AscomErrorType::InvalidOperation, "Cancelled".to_string())),
                 _ = interval.tick() => {
                     let mut state = state_arc.write().await;
                     let slewing_state = match &state.motion_state {
@@ -285,7 +289,7 @@ impl StarAdventurer {
         driver_lock: &mut MutexGuard<MotorController>,
         pos: Degrees,
         after_state: TrackingState,
-    ) -> Result<task::JoinHandle<Result<()>>> {
+    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
         // Tell Driver to start slew
         driver_lock.stop_motion(RA_CHANNEL, false)?;
 
@@ -321,14 +325,14 @@ impl StarAdventurer {
     }
 
     /// Slews to closest version of given angle relative to where it started
-    pub(crate) fn slew_motor_to_angle(
+    pub(in crate::telescope_control) fn slew_motor_to_angle(
         state_arc: &Arc<RwLock<State>>,
         state_lock: &mut RwLockWriteGuard<State>,
         driver_arc: &Arc<Mutex<MotorController<'static>>>,
         driver_lock: &mut MutexGuard<MotorController>,
         target_angle: Degrees,
         after_state: TrackingState,
-    ) -> Result<task::JoinHandle<Result<()>>> {
+    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
         let cur_pos = driver_lock.get_pos(RA_CHANNEL)?;
         let cur_angle = astro_math::modulo(cur_pos, 360.);
 
@@ -373,7 +377,7 @@ impl StarAdventurer {
         driver_lock: &mut MutexGuard<MotorController>,
         hour_angle: Hours,
         after_state: TrackingState,
-    ) -> Result<task::JoinHandle<Result<()>>> {
+    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
         let target_angle = astro_math::hours_to_deg(hour_angle - state_lock.hour_angle_offset);
         Self::slew_motor_to_angle(
             state_arc,
@@ -413,7 +417,7 @@ impl StarAdventurer {
         target_hour_angle: Hours,
         target_declination: Degrees,
         after_state: TrackingState,
-    ) -> Result<task::JoinHandle<Result<()>>> {
+    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
         Self::alert_user_to_change_declination(state_lock.declination, target_declination);
         state_lock.declination = target_declination;
 
@@ -435,7 +439,7 @@ impl StarAdventurer {
         ra: Hours,
         dec: Degrees,
         after_state: TrackingState,
-    ) -> Result<task::JoinHandle<Result<()>>> {
+    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
         let hour_angle = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state_lock.date_offset),
             state_lock.observation_location.longitude,
@@ -452,13 +456,13 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
-    pub fn can_slew(&self) -> Result<bool> {
+    pub async fn can_slew(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given equatorial coordinates, return when slew is complete
-    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> Result<()> {
-        {
+    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
+        let waiter = {
             let mut state = self.state.write().await;
             let mut driver = self.driver.lock().unwrap();
             let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -472,19 +476,18 @@ impl StarAdventurer {
                 dec,
                 restore_state,
             )?
-        }
-        .await
-        .unwrap()
+        };
+        waiter.await.unwrap()
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
-    pub fn can_slew_async(&self) -> Result<bool> {
+    pub async fn can_slew_async(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given equatorial coordinates, return immediately after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_coordinates_async(&mut self, ra: Hours, dec: Degrees) -> Result<()> {
+    pub async fn slew_to_coordinates_async(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
         let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -502,13 +505,13 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
-    pub fn can_slew_alt_az(&self) -> Result<bool> {
+    pub async fn can_slew_alt_az(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given local horizontal coordinates, return when slew is complete
-    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> Result<()> {
-        {
+    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
+        let waiter = {
             let mut state = self.state.write().await;
             let mut driver = self.driver.lock().unwrap();
             let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -528,19 +531,18 @@ impl StarAdventurer {
                 dec,
                 restore_state,
             )?
-        }
-        .await
-        .unwrap()
+        };
+        waiter.await.unwrap()
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
-    pub fn can_slew_alt_az_async(&self) -> Result<bool> {
+    pub async fn can_slew_alt_az_async(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given local horizontal coordinates, return immediately after the slew starts.
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_alt_az_async(&self, alt: Degrees, az: Degrees) -> Result<()> {
+    pub async fn slew_to_alt_az_async(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
         let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -561,8 +563,8 @@ impl StarAdventurer {
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
-    pub async fn slew_to_target(&self) -> Result<()> {
-        {
+    pub async fn slew_to_target(&self) -> AscomResult<()> {
+        let waiter = {
             let mut state = self.state.write().await;
             let mut driver = self.driver.lock().unwrap();
             let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -577,14 +579,13 @@ impl StarAdventurer {
                 dec,
                 restore_state,
             )?
-        }
-        .await
-        .unwrap()
+        };
+        waiter.await.unwrap()
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_target_async(&mut self) -> Result<()> {
+    pub async fn slew_to_target_async(&self) -> AscomResult<()> {
         let mut state = self.state.write().await;
         let mut driver = self.driver.lock().unwrap();
         let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
@@ -600,5 +601,16 @@ impl StarAdventurer {
             restore_state,
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_util;
+    #[tokio::test]
+    async fn test_slew() {
+        let sa = test_util::create_sa(None).await;
+        sa.sync_to_coordinates(0., 30.).await.unwrap();
+        sa.slew_to_coordinates(-1., 14.).await.unwrap();
     }
 }

@@ -1,7 +1,7 @@
 use crate::astro_math::Degrees;
-use crate::enums::*;
-use crate::errors::{AlpacaError, ErrorType, Result};
-use crate::{StarAdventurer, RA_CHANNEL};
+use crate::telescope_control::{StarAdventurer, RA_CHANNEL};
+use crate::util::enums::*;
+use crate::util::result::{AscomError, AscomErrorType, AscomResult};
 use std::time::Duration;
 use synscan::motors::DriveMode;
 use synscan::util::AutoGuideSpeed;
@@ -11,19 +11,19 @@ use tokio::time::sleep;
 
 impl StarAdventurer {
     /// True if the guide rate properties used for PulseGuide(GuideDirections, Int32) can ba adjusted.
-    pub fn can_set_guide_rates(&self) -> Result<bool> {
+    pub async fn can_set_guide_rates(&self) -> AscomResult<bool> {
         Ok(false)
     }
 
     /// The current Declination movement rate offset for telescope guiding (degrees/sec)
-    pub fn get_guide_rate_declination(&self) -> Result<Degrees> {
+    pub async fn get_guide_rate_declination(&self) -> AscomResult<Degrees> {
         Ok(0.)
     }
 
     /// Sets the current Declination movement rate offset for telescope guiding (degrees/sec).
-    pub fn set_guide_rate_declination(&self, _rate: Degrees) -> Result<()> {
-        Err(AlpacaError::from_msg(
-            ErrorType::ActionNotImplemented,
+    pub async fn set_guide_rate_declination(&self, _rate: Degrees) -> AscomResult<()> {
+        Err(AscomError::from_msg(
+            AscomErrorType::ActionNotImplemented,
             format!("Declination tracking not available"),
         ))
     }
@@ -34,7 +34,7 @@ impl StarAdventurer {
     }
 
     /// The current RightAscension movement rate offset for telescope guiding (degrees/sec)
-    pub async fn get_guide_rate_ra(&self) -> Result<Degrees> {
+    pub async fn get_guide_rate_ra(&self) -> AscomResult<Degrees> {
         let state = self.state.read().await;
         Ok(Self::calc_guide_rate(
             state.autoguide_speed,
@@ -43,13 +43,13 @@ impl StarAdventurer {
     }
 
     /// Sets the current RightAscension movement rate offset for telescope guiding (degrees/sec).
-    pub async fn set_guide_rate_ra(&mut self, rate: Degrees) -> Result<()> {
+    pub async fn set_guide_rate_ra(&self, rate: Degrees) -> AscomResult<()> {
         let mut state = self.state.write().await;
         let lowest_guide_rate = AutoGuideSpeed::Eighth.multiplier() * state.tracking_rate.as_deg();
         let highest_guide_rate = AutoGuideSpeed::One.multiplier() * state.tracking_rate.as_deg();
         if rate < lowest_guide_rate * 0.9 || highest_guide_rate * 1.1 < rate {
-            return Err(AlpacaError::from_msg(
-                ErrorType::InvalidValue,
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
                 format!(
                     "Guide rate must be between {} and {}",
                     lowest_guide_rate, highest_guide_rate
@@ -110,19 +110,19 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of software-pulsed guiding (via the PulseGuide(GuideDirections, Int32) method)
-    pub fn can_pulse_guide(&self) -> Result<bool> {
+    pub async fn can_pulse_guide(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
     /// Moves the scope in the given direction for the given interval or time at the rate given by the corresponding guide rate property
     pub async fn pulse_guide(
-        &mut self,
+        &self,
         guide_direction: GuideDirection,
         duration: u32,
-    ) -> Result<()> {
+    ) -> AscomResult<()> {
         if guide_direction == GuideDirection::North || guide_direction == GuideDirection::South {
-            return Err(AlpacaError::from_msg(
-                ErrorType::ActionNotImplemented,
+            return Err(AscomError::from_msg(
+                AscomErrorType::ActionNotImplemented,
                 "Can't guide in declination".to_string(),
             ));
         }
@@ -130,20 +130,20 @@ impl StarAdventurer {
         let mut state = self.state.write().await;
         let (tracking_rate, state_to_restore) = match &state.motion_state {
             MotionState::Slewing(_) => {
-                return Err(AlpacaError::from_msg(
-                    ErrorType::InvalidOperation,
+                return Err(AscomError::from_msg(
+                    AscomErrorType::InvalidOperation,
                     "Can't guide while slewing".to_string(),
                 ))
             }
             MotionState::Tracking(TrackingState::Stationary(true)) => {
-                return Err(AlpacaError::from_msg(
-                    ErrorType::InvalidWhileParked,
+                return Err(AscomError::from_msg(
+                    AscomErrorType::InvalidWhileParked,
                     "Can't guide while parked".to_string(),
                 ))
             }
             MotionState::Tracking(TrackingState::Tracking(Some(_))) => {
-                return Err(AlpacaError::from_msg(
-                    ErrorType::InvalidOperation,
+                return Err(AscomError::from_msg(
+                    AscomErrorType::InvalidOperation,
                     "Already guiding".to_string(),
                 ))
             }
@@ -207,7 +207,7 @@ impl StarAdventurer {
 
                     Ok(())
                 },
-                _ = cancel_rx.changed() => Err(AlpacaError::from_msg(ErrorType::InvalidOperation, "Cancelled".to_string())),
+                _ = cancel_rx.changed() => Err(AscomError::from_msg(AscomErrorType::InvalidOperation, "Cancelled".to_string())),
             }
         });
 
@@ -216,7 +216,7 @@ impl StarAdventurer {
     }
 
     /// True if a PulseGuide(GuideDirections, Int32) command is in progress, False otherwise
-    pub async fn is_pulse_guiding(&self) -> Result<bool> {
+    pub async fn is_pulse_guiding(&self) -> AscomResult<bool> {
         let state = self.state.read().await;
         Ok(match &state.motion_state {
             MotionState::Tracking(TrackingState::Tracking(guide_task)) => guide_task.is_some(),
