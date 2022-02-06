@@ -1357,6 +1357,7 @@ dependencies = [
 [[package]]
 name = "synscan"
 version = "0.1.0"
+source = "git+https://github.com/jsorrell/rust-synscan?branch=main#9cb3060a801140481bc713497c5340441200efb9"
 dependencies = [
  "serialport",
 ]
