@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate assert_float_eq;
-extern crate proc_macros;
+extern crate retry;
 mod alpaca_general;
 mod alpaca_telescope;
 mod astro_math;
@@ -12,6 +12,7 @@ mod util;
 use alpaca_general::*;
 use alpaca_telescope::*;
 use rocket::tokio::sync::RwLock;
+use rocket::{Build, Rocket};
 use std::sync::atomic::AtomicU32;
 use telescope_control::config::Config;
 use telescope_control::StarAdventurer;
@@ -25,19 +26,12 @@ pub struct AlpacaState {
     pub sti: AtomicU32,
 }
 
-pub(crate) async fn get_sa() -> AscomResult<StarAdventurer> {
-    StarAdventurer::new(&Config {
-        com_settings: Default::default(),
-        observation_location: Default::default(),
-        telescope_details: Default::default(),
-    })
-    .await
-}
-
 #[launch]
-async fn rocket() -> _ {
+async fn rocket() -> Rocket<Build> {
+    env_logger::init();
+
     let state = AlpacaState {
-        sa: RwLock::new(Some(get_sa().await.unwrap())),
+        sa: RwLock::new(None),
         sti: AtomicU32::new(0),
     };
 
@@ -51,6 +45,12 @@ async fn rocket() -> _ {
                 put_command_string,
                 get_connected,
                 put_connected,
+                get_description,
+                get_driver_info,
+                get_driver_version,
+                get_interface_version,
+                get_name,
+                get_supported_actions,
                 get_alignment_mode,
                 get_altitude,
                 get_aperture_area,
@@ -109,6 +109,7 @@ async fn rocket() -> _ {
                 put_tracking,
                 get_tracking_rate,
                 put_tracking_rate,
+                get_tracking_rates,
                 get_utc_date,
                 put_utc_date,
                 put_abort_slew,

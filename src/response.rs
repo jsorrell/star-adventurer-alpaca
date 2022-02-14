@@ -88,15 +88,17 @@ pub trait AlpacaSerializeDefault {}
 
 impl AlpacaSerializeDefault for bool {}
 impl AlpacaSerializeDefault for u32 {}
+impl AlpacaSerializeDefault for i32 {}
 impl AlpacaSerializeDefault for f64 {}
 impl AlpacaSerializeDefault for &str {}
 impl AlpacaSerializeDefault for String {}
 impl AlpacaSerializeDefault for &[&str] {}
 impl AlpacaSerializeDefault for AlignmentMode {}
 impl AlpacaSerializeDefault for TrackingRate {}
+impl AlpacaSerializeDefault for Vec<TrackingRate> {}
 impl AlpacaSerializeDefault for EquatorialCoordinateType {}
 impl AlpacaSerializeDefault for PierSide {}
-impl AlpacaSerializeDefault for Vec<AxisRate> {}
+impl AlpacaSerializeDefault for Vec<AxisRateRange> {}
 
 impl<T> AlpacaResponseValue for T
 where

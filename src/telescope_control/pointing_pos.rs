@@ -1,17 +1,12 @@
 use crate::astro_math;
-use crate::astro_math::{Degrees, Hours};
-use crate::telescope_control::{StarAdventurer, RA_CHANNEL};
-use crate::util::result::AscomResult;
-use std::sync::MutexGuard;
-use synscan::MotorController;
+use crate::telescope_control::driver::Driver;
+use crate::telescope_control::StarAdventurer;
+use crate::util::*;
 
 impl StarAdventurer {
-    fn get_hour_angle(
-        driver: &mut MutexGuard<MotorController>,
-        hour_angle_offset: Hours,
-    ) -> AscomResult<Hours> {
+    async fn get_hour_angle(driver: Driver, hour_angle_offset: Hours) -> AscomResult<Hours> {
         let unmoduloed_angle =
-            astro_math::deg_to_hours(driver.get_pos(RA_CHANNEL)?) + hour_angle_offset;
+            astro_math::deg_to_hours(driver.get_pos().await?) + hour_angle_offset;
         Ok(astro_math::modulo(unmoduloed_angle, 24.))
     }
 
@@ -28,12 +23,9 @@ impl StarAdventurer {
             state.observation_location.longitude,
         );
 
-        // FIXME spawn task for driver operation
-
-        let mut driver = self.driver.lock().unwrap();
         Ok(Self::calculate_ra(
             lst,
-            Self::get_hour_angle(&mut driver, state.hour_angle_offset)?,
+            Self::get_hour_angle(self.driver.clone(), state.hour_angle_offset).await?,
         ))
     }
 
@@ -46,9 +38,7 @@ impl StarAdventurer {
     /// The altitude above the local horizon of the mount's current position (degrees, positive up)
     pub async fn get_altitude(&self) -> AscomResult<Degrees> {
         let state = self.state.read().await;
-        let mut driver = self.driver.lock().unwrap();
-
-        let hour_angle = Self::get_hour_angle(&mut driver, state.hour_angle_offset)?;
+        let hour_angle = Self::get_hour_angle(self.driver.clone(), state.hour_angle_offset).await?;
 
         Ok(astro_math::calculate_alt_from_ha_dec(
             hour_angle,
@@ -60,9 +50,7 @@ impl StarAdventurer {
     /// The azimuth at the local horizon of the mount's current position (degrees, North-referenced, positive East/clockwise).
     pub async fn get_azimuth(&self) -> AscomResult<f64> {
         let state = self.state.read().await;
-        let mut driver = self.driver.lock().unwrap();
-
-        let hour_angle = Self::get_hour_angle(&mut driver, state.hour_angle_offset)?;
+        let hour_angle = Self::get_hour_angle(self.driver.clone(), state.hour_angle_offset).await?;
 
         Ok(astro_math::calculate_az_from_ha_dec(
             hour_angle,

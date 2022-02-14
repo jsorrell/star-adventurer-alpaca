@@ -20,24 +20,14 @@ impl Default for ObservingLocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComSettings {
-    pub path: String,
-    pub baud_rate: u32,
+    pub path: Option<String>,
     pub timeout_millis: u32,
 }
 
 impl Default for ComSettings {
     fn default() -> Self {
-        let path = if cfg!(unix) {
-            "/dev/ttyUSB0"
-        } else if cfg!(windows) {
-            "COMPort3"
-        } else {
-            ""
-        };
-
         Self {
-            path: path.to_string(),
-            baud_rate: 115_200,
+            path: None,
             timeout_millis: 50,
         }
     }

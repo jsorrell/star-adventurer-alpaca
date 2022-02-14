@@ -2,7 +2,7 @@ use crate::request::*;
 use crate::util::enums::*;
 use crate::util::result::*;
 use crate::AlpacaState;
-use crate::{response, AxisRate};
+use crate::{response, AxisRateRange};
 use chrono::{DateTime, Utc};
 use proc_macros::alpaca_handler;
 use rocket::State;
@@ -229,7 +229,7 @@ pub async fn put_right_ascension_rate(
     state: &AlpacaState,
 ) -> AscomResult<()> {
     try_connected!(state, sa, {
-        sa.set_guide_rate_ra(data.right_ascension_rate).await
+        sa.set_ra_rate(data.right_ascension_rate).await
     })
 }
 
@@ -284,7 +284,7 @@ pub async fn get_slewing(state: &AlpacaState) -> AscomResult<bool> {
 }
 
 #[alpaca_handler]
-pub async fn get_slew_settle_time(state: &AlpacaState) -> AscomResult<f64> {
+pub async fn get_slew_settle_time(state: &AlpacaState) -> AscomResult<u32> {
     try_connected!(state, sa, { sa.get_slew_settle_time().await })
 }
 
@@ -294,7 +294,13 @@ pub async fn put_slew_settle_time(
     state: &AlpacaState,
 ) -> AscomResult<()> {
     try_connected!(state, sa, {
-        sa.set_slew_settle_time(data.slew_settle_time).await
+        if data.slew_settle_time < 0 {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
+                "Slew settle time must be nonegative".to_string(),
+            ));
+        }
+        sa.set_slew_settle_time(data.slew_settle_time as u32).await
     })
 }
 
@@ -346,8 +352,19 @@ pub async fn get_tracking_rate(state: &AlpacaState) -> AscomResult<TrackingRate>
 #[alpaca_handler]
 pub async fn put_tracking_rate(data: TrackingRateData, state: &AlpacaState) -> AscomResult<()> {
     try_connected!(state, sa, {
-        sa.set_tracking_rate(data.tracking_rate).await
+        match TrackingRate::try_from(data.tracking_rate) {
+            Ok(r) => sa.set_tracking_rate(r).await,
+            Err(_e) => Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
+                "Invalid Tracking Rate".to_string(),
+            )),
+        }
     })
+}
+
+#[alpaca_handler]
+pub async fn get_tracking_rates(state: &AlpacaState) -> AscomResult<Vec<TrackingRate>> {
+    try_connected!(state, sa, { sa.get_tracking_rates().await })
 }
 
 #[alpaca_handler]
@@ -376,7 +393,10 @@ pub async fn put_abort_slew(state: &AlpacaState) -> AscomResult<()> {
 }
 
 #[alpaca_handler]
-pub async fn get_axis_rates(data: AxisData, state: &AlpacaState) -> AscomResult<Vec<AxisRate>> {
+pub async fn get_axis_rates(
+    data: AxisData,
+    state: &AlpacaState,
+) -> AscomResult<Vec<AxisRateRange>> {
     try_connected!(state, sa, { sa.get_axis_rates(data.axis).await })
 }
 
@@ -403,7 +423,10 @@ pub async fn put_find_home(state: &AlpacaState) -> AscomResult<()> {
 
 #[alpaca_handler]
 pub async fn put_move_axis(data: MoveAxisData, state: &AlpacaState) -> AscomResult<()> {
-    try_connected!(state, sa, { sa.move_axis(data.axis, data.rate).await })
+    try_connected!(state, sa, {
+        let result = sa.move_axis(data.axis, data.rate).await;
+        result
+    })
 }
 
 #[alpaca_handler]
@@ -433,7 +456,8 @@ pub async fn put_slew_to_alt_az(data: AltAzData, state: &AlpacaState) -> AscomRe
 #[alpaca_handler]
 pub async fn put_slew_to_alt_az_async(data: AltAzData, state: &AlpacaState) -> AscomResult<()> {
     try_connected!(state, sa, {
-        sa.slew_to_alt_az_async(data.altitide, data.azimuth).await
+        sa.slew_to_alt_az_async(data.altitide, data.azimuth).await?;
+        Ok(())
     })
 }
 
@@ -452,7 +476,8 @@ pub async fn put_slew_to_coordinates_async(
 ) -> AscomResult<()> {
     try_connected!(state, sa, {
         sa.slew_to_coordinates_async(data.right_ascension, data.declination)
-            .await
+            .await?;
+        Ok(())
     })
 }
 
@@ -463,7 +488,10 @@ pub async fn put_slew_to_target(state: &AlpacaState) -> AscomResult<()> {
 
 #[alpaca_handler]
 pub async fn put_slew_to_target_async(state: &AlpacaState) -> AscomResult<()> {
-    try_connected!(state, sa, { sa.slew_to_target_async().await })
+    try_connected!(state, sa, {
+        sa.slew_to_target_async().await?;
+        Ok(())
+    })
 }
 
 #[alpaca_handler]

@@ -1,9 +1,7 @@
 use crate::astro_math::Degrees;
-use crate::telescope_control::{StarAdventurer, RA_CHANNEL};
-use crate::util::enums::*;
-use crate::util::result::*;
-use synscan::motors::Direction;
-use tokio::task;
+use crate::telescope_control::StarAdventurer;
+use crate::util::*;
+use synscan::Direction;
 
 impl StarAdventurer {
     /// True if the Tracking property can be changed, turning telescope sidereal tracking on and off.
@@ -33,7 +31,7 @@ impl StarAdventurer {
     /// Sets the right ascension tracking rate (arcseconds per second)
     pub async fn set_ra_rate(&self, _rate: f64) -> AscomResult<()> {
         Err(AscomError::from_msg(
-            AscomErrorType::InvalidOperation,
+            AscomErrorType::PropertyOrMethodNotImplemented,
             "Setting RA tracking rate is not supported".to_string(),
         ))
     }
@@ -51,8 +49,8 @@ impl StarAdventurer {
     /// Sets the declination tracking rate (arcseconds per second)
     pub async fn set_declination_rate(&self, _rate: f64) -> AscomResult<()> {
         Err(AscomError::from_msg(
-            AscomErrorType::ActionNotImplemented,
-            format!("Declination tracking not available"),
+            AscomErrorType::PropertyOrMethodNotImplemented,
+            "Declination tracking not available".to_string(),
         ))
     }
 
@@ -74,35 +72,35 @@ impl StarAdventurer {
     /// Sets the tracking rate of the telescope's sidereal drive
     pub async fn set_tracking_rate(&self, tracking_rate: TrackingRate) -> AscomResult<()> {
         let mut state = self.state.write().await;
+        // No change needed
+        if state.tracking_rate == tracking_rate {
+            return Ok(());
+        }
+
         state.tracking_rate = tracking_rate;
-        match &state.motion_state {
-            MotionState::Tracking(TrackingState::Tracking(guiding)) => {
-                match guiding {
-                    Some(t) => t.send(true).unwrap(),
-                    None => (),
-                }
-                let driver_clone = self.driver.clone();
-                task::spawn_blocking(move || {
-                    let mut driver = driver_clone.lock().unwrap();
-                    driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate.as_deg(), false)?;
-                    AscomResult::Ok(())
-                })
-                .await
-                .unwrap()?;
-            }
-            _ => (),
+
+        if state.motor_state.is_tracking() {
+            let current_motor_rate = state.motor_state.determine_motion_rate();
+            let target_motor_state = state.motor_state.clone_without_guiding();
+
+            // Change current tracking rate
+            // Changing speed while moving is fine b/c it's at low speed
+            self.driver
+                .change_motor_rate(
+                    current_motor_rate,
+                    target_motor_state.determine_motion_rate(),
+                )
+                .await?;
+
+            state.motor_state = target_motor_state;
         };
 
         Ok(())
     }
 
     /// Returns the state of the telescope's sidereal tracking drive.
-    /// TODO is it tracking while goto? Going with no for now
     pub async fn is_tracking(&self) -> AscomResult<bool> {
-        Ok(match self.state.read().await.motion_state {
-            MotionState::Tracking(TrackingState::Tracking(_)) => true,
-            _ => false,
-        })
+        Ok(self.state.read().await.motor_state.is_tracking())
     }
 
     /// Sets the state of the telescope's sidereal tracking drive.
@@ -111,50 +109,50 @@ impl StarAdventurer {
     /// TODO Going with can only set it while not gotoing
     pub async fn set_is_tracking(&self, should_track: bool) -> AscomResult<()> {
         let mut state = self.state.write().await;
-        match (&state.motion_state, should_track) {
-            (MotionState::Tracking(TrackingState::Tracking(guiding)), false) => {
-                match guiding {
-                    Some(t) => t.send(true).unwrap(),
-                    None => (),
-                };
-
-                let driver_clone = self.driver.clone();
-
-                task::spawn_blocking(move || {
-                    driver_clone.lock().unwrap().stop_motion(RA_CHANNEL, false)
-                })
-                .await
-                .unwrap()?;
-
-                state.motion_state = MotionState::Tracking(TrackingState::Stationary(false));
-                Ok(())
-            }
-            (MotionState::Tracking(TrackingState::Stationary(false)), true) => {
-                let tracking_rate = state.tracking_rate.as_deg();
-
-                let driver_clone = self.driver.clone();
-                task::spawn_blocking(move || {
-                    let mut driver = driver_clone.lock().unwrap();
-                    // direction and mode should already be set
-                    driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
-                    driver.start_motion(RA_CHANNEL)
-                })
-                .await
-                .unwrap()?;
-                state.motion_state = MotionState::Tracking(TrackingState::Tracking(None));
-                Ok(())
-            }
-            (MotionState::Tracking(TrackingState::Stationary(true)), true) => {
-                Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
-                    "Invalid while parked".to_string(),
-                ))
-            }
-            (MotionState::Slewing(_), true) => Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Invalid while slewing".to_string(),
-            )),
-            _ => Ok(()),
+        // Nothing to do
+        if state.motor_state.is_tracking() == should_track {
+            return Ok(());
         }
+
+        if state.motor_state.is_parked() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
+                "Can't start tracking while parked".to_string(),
+            ));
+        }
+
+        if state.motor_state.is_slewing() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
+                "Can't start tracking while slewing".to_string(),
+            ));
+        }
+
+        if state.motor_state.is_manually_moving_axis() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
+                "Can't start tracking while moving axis".to_string(),
+            ));
+        }
+
+        let current_rate = state.motor_state.determine_motion_rate();
+
+        let target_state = if should_track {
+            MotorState::Moving(MovingState::Constant {
+                state: ConstantMotionState::Tracking,
+                guiding_state: GuidingState::Idle,
+                motion_rate: state
+                    .tracking_rate
+                    .into_motion_rate(state.rotation_direction_key),
+            })
+        } else {
+            MotorState::Stationary(StationaryState::Unparked(GuidingState::Idle))
+        };
+
+        self.driver
+            .change_motor_rate(current_rate, target_state.determine_motion_rate())
+            .await?;
+        state.motor_state = target_state;
+        Ok(())
     }
 }

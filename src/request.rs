@@ -101,7 +101,7 @@ pub struct SiteLongitudeData {
 #[derive(FromForm, Debug, Copy, Clone)]
 pub struct SlewSettleTimeData {
     #[field(name = "SlewSettleTime")]
-    pub slew_settle_time: f64,
+    pub slew_settle_time: i32,
 }
 
 #[alpaca_request_data]
@@ -129,14 +129,14 @@ pub struct TrackingData {
 #[derive(FromForm, Debug, Copy, Clone)]
 pub struct TrackingRateData {
     #[field(name = "TrackingRate")]
-    pub tracking_rate: TrackingRate,
+    pub tracking_rate: i32,
 }
 
 #[alpaca_request_data]
 #[derive(FromForm, Debug, Clone)]
 pub struct UTCDateData {
     #[field(name = "UTCDate")]
-    utc_date_string: String,
+    pub utc_date_string: String,
 }
 
 impl UTCDateData {

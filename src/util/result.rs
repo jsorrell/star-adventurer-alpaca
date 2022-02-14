@@ -1,7 +1,8 @@
+use crate::{Degrees, Hours};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::{fmt, result};
-use synscan::result::SynScanError;
+use synscan::util::SynScanError;
 
 pub type AscomResult<T> = result::Result<T, AscomError>;
 
@@ -58,3 +59,47 @@ impl Display for AscomError {
 }
 
 impl Error for AscomError {}
+
+pub fn check_dec(dec: Degrees) -> AscomResult<()> {
+    if (-90. ..=90.).contains(&dec) {
+        Ok(())
+    } else {
+        return Err(AscomError::from_msg(
+            AscomErrorType::InvalidValue,
+            format!("Declination of {} is not valid", dec),
+        ));
+    }
+}
+
+pub fn check_ra(ra: Hours) -> AscomResult<()> {
+    if (0. ..24.).contains(&ra) {
+        Ok(())
+    } else {
+        return Err(AscomError::from_msg(
+            AscomErrorType::InvalidValue,
+            format!("Right Ascension of {} is not valid", ra),
+        ));
+    }
+}
+
+pub fn check_alt(alt: Degrees) -> AscomResult<()> {
+    if (-90. ..=90.).contains(&alt) {
+        Ok(())
+    } else {
+        return Err(AscomError::from_msg(
+            AscomErrorType::InvalidValue,
+            format!("Altitude of {} is not valid", alt),
+        ));
+    }
+}
+
+pub fn check_az(az: Degrees) -> AscomResult<()> {
+    if (0. ..360.).contains(&az) {
+        Ok(())
+    } else {
+        return Err(AscomError::from_msg(
+            AscomErrorType::InvalidValue,
+            format!("Azimuth {} is not valid", az),
+        ));
+    }
+}

@@ -9,7 +9,7 @@ pub use result::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
-pub struct AxisRate {
+pub struct AxisRateRange {
     #[serde(rename = "Maximum")]
     pub(crate) maximum: f64,
     #[serde(rename = "Minimum")]

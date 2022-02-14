@@ -1,127 +1,134 @@
-use crate::astro_math::{Degrees, Hours};
-use crate::telescope_control::{StarAdventurer, State, RA_CHANNEL};
-use crate::util::enums::*;
-use crate::util::result::*;
-use crate::{astro_math, AxisRate};
-use std::sync::{Arc, Mutex, MutexGuard};
+use crate::rotation_direction::RotationDirection;
+use crate::telescope_control::driver::Driver;
+use crate::telescope_control::{StarAdventurer, State, StateArc};
+use crate::tracking_direction::TrackingDirection;
+use crate::util::*;
+use crate::{astro_math, AxisRateRange};
+use std::future::Future;
 use std::time::Duration;
-use synscan::motors::{Direction, DriveMode};
-use synscan::MotorController;
-use tokio::sync::{watch, RwLock, RwLockWriteGuard};
+use tokio::sync::{oneshot, RwLockWriteGuard};
+use tokio::task::JoinHandle;
 use tokio::{task, time};
+
+type SlewTaskHandle = JoinHandle<AscomResult<()>>;
+
+#[derive(Debug)]
+pub(in crate::telescope_control) enum CompletionResult<T> {
+    Completed(T),
+    Cancelled,
+}
 
 impl StarAdventurer {
     /// True if telescope is currently moving in response to one of the Slew methods or the MoveAxis(TelescopeAxes, Double) method
     /// False at all other times.
     pub async fn is_slewing(&self) -> AscomResult<bool> {
-        Ok(match self.state.read().await.motion_state {
-            MotionState::Slewing(_) => true,
-            _ => false,
-        })
+        let state = self.state.read().await;
+        Ok(state.motor_state.is_slewing() || state.motor_state.is_manually_moving_axis())
     }
 
     /// Returns the post-slew settling time (sec.)
-    pub async fn get_slew_settle_time(&self) -> AscomResult<f64> {
-        // TODO use this
+    pub async fn get_slew_settle_time(&self) -> AscomResult<u32> {
         Ok(self.state.read().await.post_slew_settle_time)
     }
 
     /// Sets the post-slew settling time (integer sec.).
-    pub async fn set_slew_settle_time(&self, time: f64) -> AscomResult<()> {
+    pub async fn set_slew_settle_time(&self, time: u32) -> AscomResult<()> {
         self.state.write().await.post_slew_settle_time = time;
         Ok(())
     }
 
-    pub(in crate::telescope_control) async fn restore_state<'a, F>(
-        state_to_restore: TrackingState,
-        state: &mut RwLockWriteGuard<'a, State>,
-        driver: &Arc<Mutex<MotorController<'static>>>,
-        determinant: F,
-    ) -> AscomResult<bool>
-    where
-        F: FnOnce(&mut MutexGuard<MotorController>) -> AscomResult<bool> + Send + 'static,
-    {
-        let start_motion = match state_to_restore {
-            TrackingState::Tracking(_) => true,
-            TrackingState::Stationary(_) => false,
-        };
-        let tracking_rate = state.tracking_rate.as_deg();
-        let tracking_direction = Self::get_tracking_direction(state.observation_location.latitude);
-
-        let driver_clone = driver.clone();
-
-        let did_restore = task::spawn_blocking(move || {
-            let mut driver = driver_clone.lock().unwrap();
-            if determinant(&mut driver)? {
-                driver.set_motion_mode(
-                    RA_CHANNEL,
-                    DriveMode::Tracking,
-                    false,
-                    tracking_direction,
-                )?;
-                driver.set_motion_rate_degrees(RA_CHANNEL, tracking_rate, false)?;
-                if start_motion {
-                    driver.start_motion(RA_CHANNEL)?;
-                } else {
-                    driver.stop_motion(RA_CHANNEL, false)?;
-                }
-                return AscomResult::Ok(true);
-            }
-            Ok(false)
-        })
-        .await
-        .unwrap()?;
-
-        if did_restore {
-            state.motion_state = MotionState::Tracking(state_to_restore);
-        }
-
-        Ok(did_restore)
-    }
-
-    async fn abort_slew_with_locks(
-        state: &mut RwLockWriteGuard<'_, State>,
-        driver: &Arc<Mutex<MotorController<'static>>>,
-    ) -> AscomResult<()> {
-        match &state.motion_state {
-            MotionState::Tracking(_) => Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Not slewing".to_string(),
-            )),
-            MotionState::Slewing(slewing_state) => {
-                match slewing_state {
-                    SlewingState::GotoSlewing(_, _, task_canceller) => {
-                        task_canceller.send(true).unwrap()
-                    }
-                    _ => (),
-                };
-
-                let state_to_restore = slewing_state.get_state_to_restore();
-                Self::restore_state(state_to_restore, state, driver, |_| Ok(true)).await?;
-                Ok(())
+    async fn restore_state_after_slew(
+        after_state: AfterSlewState,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
+    ) {
+        if after_state == AfterSlewState::Tracking {
+            if let Err(_e) = driver
+                .start_rotation(MotionRate::new(
+                    state_lock.tracking_rate.into(),
+                    TrackingDirection::WithTracking
+                        .using(state_lock.rotation_direction_key)
+                        .into(),
+                ))
+                .await
+            {
+                panic!("Fatal: Entered unknown state trying to restore state after slew");
             }
         }
+
+        state_lock.motor_state = MotorState::from_after_state(
+            after_state,
+            state_lock.tracking_rate,
+            TrackingDirection::WithTracking
+                .using(state_lock.rotation_direction_key)
+                .into(),
+        );
     }
 
     /// Immediately Stops a slew in progress.
     pub async fn abort_slew(&self) -> AscomResult<()> {
         let mut state = self.state.write().await;
-        Self::abort_slew_with_locks(&mut state, &self.driver).await
+
+        // Spec wants this for some reason
+        if state.motor_state.is_parked() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidWhileParked,
+                "Can't abort slew while parked".to_string(),
+            ));
+        }
+
+        // Nothing to do if not slewing
+        if !(state.motor_state.is_slewing() || state.motor_state.is_manually_moving_axis()) {
+            return Ok(());
+        }
+
+        // Nothing to do if already stopping
+        if state.motor_state.slew_is_stopping() {
+            // // wait for stop
+            // driver.clone().wait_for_stop().await;
+            // the slew task handles restoring the state
+
+            // TODO no great way to know when we've stopped -- can implement with signals if necessary
+            // return immediately for now
+            return Ok(());
+        }
+
+        let after_state = state.motor_state.as_after_slew_state();
+
+        if state.motor_state.is_moving() {
+            // Stop slew
+            state.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Stopping));
+            let stop_complete = self.driver.clone().stop_async().await?;
+            std::mem::drop(state);
+
+            // Synchronous
+            stop_complete.await;
+            state = self.state.write().await;
+        }
+
+        Self::restore_state_after_slew(after_state, &mut state, self.driver.clone()).await;
+
+        Ok(())
+    }
+
+    pub(in crate::telescope_control) fn get_axis_rate_range() -> AxisRateRange {
+        // experimentally, 1_103 to 16_000_000 for period
+        AxisRateRange {
+            minimum: Driver::get_min_speed(),
+            maximum: Driver::get_max_speed(),
+        }
     }
 
     /// The rates at which the telescope may be moved about the specified axis by the MoveAxis(TelescopeAxes, Double) method.
-    pub async fn get_axis_rates(&self, axis: Axis) -> AscomResult<Vec<AxisRate>> {
-        if axis != Axis::Primary {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Can only slew around primary axis".to_string(),
-            ));
-        }
-        // experimentally, 1_103 to 16_000_000 for period
-        Ok(vec![AxisRate {
-            minimum: 0.000029,
-            maximum: 0.418032,
-        }])
+    pub async fn get_axis_rates(&self, axis: Axis) -> AscomResult<Vec<AxisRateRange>> {
+        Ok(if axis == Axis::Primary {
+            vec![Self::get_axis_rate_range()]
+        } else {
+            vec![AxisRateRange {
+                minimum: 0.,
+                maximum: 0.,
+            }]
+        })
     }
 
     /// True if this telescope can move the requested axis.
@@ -147,8 +154,8 @@ impl StarAdventurer {
     /// Locates the telescope's "home" position (synchronous)
     pub async fn find_home(&self) -> AscomResult<()> {
         Err(AscomError::from_msg(
-            AscomErrorType::ActionNotImplemented,
-            format!("Home is not implemented"),
+            AscomErrorType::PropertyOrMethodNotImplemented,
+            "Home is not implemented".to_string(),
         ))
     }
 
@@ -158,186 +165,134 @@ impl StarAdventurer {
     pub async fn move_axis(&self, axis: Axis, rate: Degrees) -> AscomResult<()> {
         if axis != Axis::Primary {
             return Err(AscomError::from_msg(
-                AscomErrorType::ActionNotImplemented,
-                format!("Can only slew on primary axis"),
+                AscomErrorType::PropertyOrMethodNotImplemented,
+                "Can only slew on primary axis".to_string(),
             ));
         }
 
-        if rate != 0.
-            && (rate < self.get_axis_rates(axis).await.unwrap()[0].minimum
-                || self.get_axis_rates(axis).await.unwrap()[0].maximum < rate)
-        {
+        // rate of 0 is just an alias for killing slews (i think) so we can redirect there
+        if rate == 0. {
+            log::info!("Redirecting moveaxis to abort");
+            return self.abort_slew().await;
+        }
+
+        if !(Driver::get_min_speed()..=Driver::get_max_speed()).contains(&rate.abs()) {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidValue,
-                format!("Rate is invalid"),
+                "Rate is invalid".to_string(),
             ));
         }
 
         let mut state = self.state.write().await;
-        match &state.motion_state {
-            MotionState::Slewing(slewing_state) => match (slewing_state, rate == 0.) {
-                (SlewingState::ManualSlewing(_), true) => {
-                    Self::abort_slew_with_locks(&mut state, &self.driver).await
-                }
-                _ => Err(AscomError::from_msg(
-                    AscomErrorType::InvalidOperation,
-                    "Already slewing".to_string(),
-                )),
+        Self::check_state_for_slew(&state.motor_state)?;
+
+        let current_rate = state.motor_state.determine_motion_rate();
+        let target_direction = if rate < 0. {
+            TrackingDirection::AgainstTracking
+        } else {
+            TrackingDirection::WithTracking
+        };
+        let target_rate = MotionRate::new(
+            rate.abs(),
+            target_direction.using(state.rotation_direction_key).into(),
+        );
+
+        let target_state = MotorState::Moving(MovingState::Constant {
+            state: ConstantMotionState::MoveAxis {
+                after_state: state.motor_state.as_after_slew_state(),
             },
-            MotionState::Tracking(ts) => {
-                let prev_state = match ts {
-                    TrackingState::Tracking(Some(task_canceller)) => {
-                        task_canceller.send(true).unwrap();
-                        TrackingState::Tracking(None)
-                    }
-                    TrackingState::Tracking(None) => TrackingState::Tracking(None),
-                    TrackingState::Stationary(true) => {
-                        return Err(AscomError::from_msg(
-                            AscomErrorType::InvalidWhileParked,
-                            "Can't slew while parked".to_string(),
-                        ))
-                    }
-                    TrackingState::Stationary(false) => TrackingState::Stationary(false),
-                };
-                state.motion_state = MotionState::Slewing(SlewingState::ManualSlewing(prev_state));
-                let mut direction =
-                    Self::get_tracking_direction(state.observation_location.latitude);
-                direction = if rate < 0. {
-                    direction.opposite()
-                } else {
-                    direction
-                };
+            guiding_state: GuidingState::Idle,
+            motion_rate: target_rate,
+        });
 
-                let mut driver = self.driver.lock().unwrap();
-                driver.set_motion_mode(RA_CHANNEL, DriveMode::Tracking, false, direction)?;
-                driver.set_motion_rate_degrees(RA_CHANNEL, rate.abs(), false)?;
-                driver.start_motion(RA_CHANNEL)?;
-                Ok(())
-            }
-        }
+        self.driver
+            .change_motor_rate(current_rate, target_rate)
+            .await?;
+
+        state.motor_state = target_state;
+        Ok(())
     }
 
-    /// Ensures we are not slewing or parked and stops pulse guiding
-    /// Returns the state that should be restored when done
-    pub(crate) fn check_current_state_for_slewing(
-        motion_state: &MotionState,
-    ) -> AscomResult<TrackingState> {
-        match &motion_state {
-            MotionState::Slewing(_) => Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Already slewing".to_string(),
-            )),
-            MotionState::Tracking(TrackingState::Stationary(true)) => Err(AscomError::from_msg(
-                AscomErrorType::InvalidWhileParked,
-                "Can't slew while parked".to_string(),
-            )),
-            MotionState::Tracking(TrackingState::Tracking(Some(task_canceller))) => {
-                task_canceller.send(true).unwrap();
-                Ok(TrackingState::Tracking(None))
-            }
-            MotionState::Tracking(TrackingState::Tracking(None)) => {
-                Ok(TrackingState::Tracking(None))
-            }
-            MotionState::Tracking(TrackingState::Stationary(false)) => {
-                Ok(TrackingState::Stationary(false))
-            }
-        }
-    }
+    pub(in crate::telescope_control) async fn complete_slew(
+        state_arc: StateArc,
+        driver: Driver,
+        cancel_rx: oneshot::Receiver<()>,
+        goto_complete: impl Future<Output = impl Future<Output = ()>>,
+    ) -> CompletionResult<()> {
+        tokio::select! {
+            _ = cancel_rx => {
+                log::info!("Slew task cancelled");
+                CompletionResult::Cancelled
+            },
+            stop_complete = goto_complete => {
+                // Stop
+                let mut state = state_arc.write().await;
+                let after_state = state.motor_state.get_after_state().unwrap();
+                state.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Stopping));
+                std::mem::drop(state);
+                stop_complete.await;
 
-    pub(in crate::telescope_control) async fn goto_task(
-        state_arc: Arc<RwLock<State>>,
-        driver_arc: Arc<Mutex<MotorController<'static>>>,
-        cancel_rx: watch::Receiver<bool>,
-    ) -> AscomResult<()> {
-        let mut interval = time::interval(Duration::from_millis(1000));
-
-        loop {
-            let mut cancel_rx = cancel_rx.clone();
-            // Check every second
-            tokio::select! {
-                // FIXME fix this error
-                _ = cancel_rx.changed() => return Err(AscomError::from_msg(AscomErrorType::InvalidOperation, "Cancelled".to_string())),
-                _ = interval.tick() => {
-                    let mut state = state_arc.write().await;
-                    let slewing_state = match &state.motion_state {
-                        MotionState::Slewing(slewing_state) => slewing_state,
-                        _ => unreachable!(),
+                // Settle
+                let mut state = state_arc.write().await;
+                if 0 < state.post_slew_settle_time && after_state != AfterSlewState::Parked {
+                    let (canceller, cancel_rx) = oneshot::channel();
+                    state.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Settling { canceller }));
+                    let settled = time::sleep(Duration::from_secs(state.post_slew_settle_time as u64));
+                    std::mem::drop(state);
+                    tokio::select! {
+                        _ = cancel_rx => {
+                            log::info!("Settle task cancelled");
+                            return CompletionResult::Cancelled
+                        }
+                        _ = settled => {}
                     };
-                    let state_to_restore = slewing_state.get_state_to_restore();
-
-                    let did_restore =
-                        Self::restore_state(state_to_restore, &mut state, &driver_arc, |driver| {
-                            let status = driver.get_status(RA_CHANNEL)?;
-                            Ok(status.mode == DriveMode::Tracking)
-                        })
-                        .await?;
-
-                    if did_restore {
-                        return Ok(());
-                    }
+                    // re-lock the state we dropped
+                    state = state_arc.write().await;
                 }
+
+                // Restore
+                Self::restore_state_after_slew(after_state, &mut state, driver).await;
+                CompletionResult::Completed(())
             }
         }
     }
 
     /// pos in degrees relative to turning on mount
     /// pos can be negative or positive or past 360 deg
-    fn slew_motor_to_pos(
-        state_arc: &Arc<RwLock<State>>,
-        state_lock: &mut RwLockWriteGuard<State>,
-        driver_arc: &Arc<Mutex<MotorController<'static>>>,
-        driver_lock: &mut MutexGuard<MotorController>,
+    async fn slew_motor_to_pos(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
         pos: Degrees,
-        after_state: TrackingState,
-    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
-        // Tell Driver to start slew
-        driver_lock.stop_motion(RA_CHANNEL, false)?;
+        after_state: AfterSlewState,
+    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+        let goto_complete = driver.clone().goto_async(pos).await?;
 
-        // Set driver to max speed
-        driver_lock.set_step_period(RA_CHANNEL, 1)?;
-        driver_lock.set_goto_target(RA_CHANNEL, pos)?;
+        let (canceller, cancel_rx) = oneshot::channel();
+        let complete_slew_future =
+            Self::complete_slew(state_arc.clone(), driver.clone(), cancel_rx, goto_complete);
 
-        // Put in GOTO mode (2nd two params are ignored here)
-        driver_lock.set_motion_mode(
-            RA_CHANNEL,
-            synscan::motors::DriveMode::Goto,
-            false,
-            Direction::Clockwise,
-        )?;
+        state_lock.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Gotoing {
+            destination: pos,
+            canceller,
+            after_state,
+        }));
 
-        // GO!
-        driver_lock.start_motion(RA_CHANNEL)?;
-
-        let state_arc_clone = Arc::clone(&state_arc);
-        let driver_arc_clone = Arc::clone(&driver_arc);
-
-        // Init goto task
-        let (canceller, cancel_rx) = watch::channel::<bool>(false);
-        let goto_task = task::spawn(Self::goto_task(
-            state_arc_clone,
-            driver_arc_clone,
-            cancel_rx,
-        ));
-
-        state_lock.motion_state =
-            MotionState::Slewing(SlewingState::GotoSlewing(pos, after_state, canceller));
-        Ok(goto_task)
+        Ok(complete_slew_future)
     }
 
     /// Slews to closest version of given angle relative to where it started
-    pub(in crate::telescope_control) fn slew_motor_to_angle(
-        state_arc: &Arc<RwLock<State>>,
-        state_lock: &mut RwLockWriteGuard<State>,
-        driver_arc: &Arc<Mutex<MotorController<'static>>>,
-        driver_lock: &mut MutexGuard<MotorController>,
+    pub(in crate::telescope_control) async fn slew_motor_to_angle(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
         target_angle: Degrees,
-        after_state: TrackingState,
-    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
-        let cur_pos = driver_lock.get_pos(RA_CHANNEL)?;
+        after_state: AfterSlewState,
+    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+        let cur_pos = driver.get_pos().await?;
         let cur_angle = astro_math::modulo(cur_pos, 360.);
 
         let target_angle = astro_math::modulo(target_angle, 360.);
-        println!("Cur Angle: {}, Target Angle: {}", cur_angle, target_angle);
 
         let no_overflow_distance = (target_angle - cur_angle).abs();
         let overflow_distance = 360. - no_overflow_distance;
@@ -349,44 +304,25 @@ impl StarAdventurer {
             } else {
                 overflow_distance
             }
+        } else if cur_angle < target_angle {
+            no_overflow_distance
         } else {
-            if cur_angle < target_angle {
-                no_overflow_distance
-            } else {
-                -no_overflow_distance
-            }
+            -no_overflow_distance
         };
 
-        println!("Angle Change: {}", change);
-
-        Self::slew_motor_to_pos(
-            state_arc,
-            state_lock,
-            driver_arc,
-            driver_lock,
-            cur_pos + change,
-            after_state,
-        )
+        Self::slew_motor_to_pos(state_arc, state_lock, driver, cur_pos + change, after_state).await
     }
 
     /// Slews to closest version of given hour angle
-    fn slew_motor_to_hour_angle(
-        state_arc: &Arc<RwLock<State>>,
-        state_lock: &mut RwLockWriteGuard<State>,
-        driver_arc: &Arc<Mutex<MotorController<'static>>>,
-        driver_lock: &mut MutexGuard<MotorController>,
+    async fn slew_motor_to_hour_angle(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
         hour_angle: Hours,
-        after_state: TrackingState,
-    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
+        after_state: AfterSlewState,
+    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
         let target_angle = astro_math::hours_to_deg(hour_angle - state_lock.hour_angle_offset);
-        Self::slew_motor_to_angle(
-            state_arc,
-            state_lock,
-            driver_arc,
-            driver_lock,
-            target_angle,
-            after_state,
-        )
+        Self::slew_motor_to_angle(state_arc, state_lock, driver, target_angle, after_state).await
     }
 
     fn alert_user_to_change_declination(cur_declination: Degrees, target_declination: Degrees) {
@@ -409,37 +345,36 @@ impl StarAdventurer {
         }
     }
 
-    fn slew_to_hour_angle_and_dec(
-        state_arc: &Arc<RwLock<State>>,
-        state_lock: &mut RwLockWriteGuard<State>,
-        driver_arc: &Arc<Mutex<MotorController<'static>>>,
-        driver_lock: &mut MutexGuard<MotorController>,
+    async fn slew_to_hour_angle_and_dec(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
         target_hour_angle: Hours,
         target_declination: Degrees,
-        after_state: TrackingState,
-    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
+        after_state: AfterSlewState,
+    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
         Self::alert_user_to_change_declination(state_lock.declination, target_declination);
         state_lock.declination = target_declination;
 
         Self::slew_motor_to_hour_angle(
             state_arc,
             state_lock,
-            driver_arc,
-            driver_lock,
+            driver,
             target_hour_angle,
             after_state,
         )
+        .await
     }
 
-    fn slew_to_coordinates_with_locks(
-        state_arc: &Arc<RwLock<State>>,
-        state_lock: &mut RwLockWriteGuard<State>,
-        driver_arc: &Arc<Mutex<MotorController<'static>>>,
-        driver_lock: &mut MutexGuard<MotorController>,
+    // TODO include estimated slew time in time calculations
+    async fn slew_to_coordinates_with_locks(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
         ra: Hours,
         dec: Degrees,
-        after_state: TrackingState,
-    ) -> AscomResult<task::JoinHandle<AscomResult<()>>> {
+        after_state: AfterSlewState,
+    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
         let hour_angle = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state_lock.date_offset),
             state_lock.observation_location.longitude,
@@ -447,12 +382,12 @@ impl StarAdventurer {
         Self::slew_to_hour_angle_and_dec(
             state_arc,
             state_lock,
-            driver_arc,
-            driver_lock,
+            driver,
             hour_angle,
             dec,
             after_state,
         )
+        .await
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
@@ -462,22 +397,10 @@ impl StarAdventurer {
 
     /// Move the telescope to the given equatorial coordinates, return when slew is complete
     pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
-        let waiter = {
-            let mut state = self.state.write().await;
-            let mut driver = self.driver.lock().unwrap();
-            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
-
-            Self::slew_to_coordinates_with_locks(
-                &self.state,
-                &mut state,
-                &self.driver,
-                &mut driver,
-                ra,
-                dec,
-                restore_state,
-            )?
-        };
-        waiter.await.unwrap()
+        self.slew_to_coordinates_async(ra, dec)
+            .await?
+            .await
+            .unwrap()
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
@@ -487,21 +410,18 @@ impl StarAdventurer {
 
     /// Move the telescope to the given equatorial coordinates, return immediately after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_coordinates_async(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
-        let mut state = self.state.write().await;
-        let mut driver = self.driver.lock().unwrap();
-        let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+    pub async fn slew_to_coordinates_async(
+        &self,
+        ra: Hours,
+        dec: Degrees,
+    ) -> AscomResult<SlewTaskHandle> {
+        check_ra(ra)?;
+        check_dec(dec)?;
 
-        let _join_handle = Self::slew_to_coordinates_with_locks(
-            &self.state,
-            &mut state,
-            &self.driver,
-            &mut driver,
-            ra,
-            dec,
-            restore_state,
-        )?;
-        Ok(())
+        let mut state = self.state.write().await;
+        state.target.right_ascension = Some(ra);
+        state.target.declination = Some(dec);
+        Self::slew_to_target_with_lock(self.state.clone(), &mut state, self.driver.clone()).await
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
@@ -511,28 +431,10 @@ impl StarAdventurer {
 
     /// Move the telescope to the given local horizontal coordinates, return when slew is complete
     pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
-        let waiter = {
-            let mut state = self.state.write().await;
-            let mut driver = self.driver.lock().unwrap();
-            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
-
-            let (ha, dec) = astro_math::calculate_ha_dec_from_alt_az(
-                alt,
-                az,
-                state.observation_location.latitude,
-            );
-
-            Self::slew_to_hour_angle_and_dec(
-                &self.state,
-                &mut state,
-                &self.driver,
-                &mut driver,
-                ha,
-                dec,
-                restore_state,
-            )?
-        };
-        waiter.await.unwrap()
+        log::warn!("Starting synchronous alt az slew");
+        self.slew_to_alt_az_async(alt, az).await?.await.unwrap()?;
+        log::warn!("Ending synchrnonous");
+        Ok(())
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
@@ -542,64 +444,95 @@ impl StarAdventurer {
 
     /// Move the telescope to the given local horizontal coordinates, return immediately after the slew starts.
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_alt_az_async(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
+    pub async fn slew_to_alt_az_async(
+        &self,
+        alt: Degrees,
+        az: Degrees,
+    ) -> AscomResult<SlewTaskHandle> {
+        check_alt(alt)?;
+        check_az(az)?;
+
         let mut state = self.state.write().await;
-        let mut driver = self.driver.lock().unwrap();
-        let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
+        Self::check_state_for_slew(&state.motor_state)?;
+        let after_state = state.motor_state.as_after_slew_state();
 
         let (ha, dec) =
             astro_math::calculate_ha_dec_from_alt_az(alt, az, state.observation_location.latitude);
 
-        let _join_handle = Self::slew_to_hour_angle_and_dec(
-            &self.state,
+        let slew_task = Self::slew_to_hour_angle_and_dec(
+            self.state.clone(),
             &mut state,
-            &self.driver,
-            &mut driver,
+            self.driver.clone(),
             ha,
             dec,
-            restore_state,
-        )?;
-        Ok(())
+            after_state,
+        )
+        .await?;
+
+        Ok(task::spawn(async move {
+            let _cancelled = slew_task.await;
+            Ok(())
+        }))
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
     pub async fn slew_to_target(&self) -> AscomResult<()> {
-        let waiter = {
-            let mut state = self.state.write().await;
-            let mut driver = self.driver.lock().unwrap();
-            let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
-            let ra = state.target.right_ascension;
-            let dec = state.target.declination;
-            Self::slew_to_coordinates_with_locks(
-                &self.state,
-                &mut state,
-                &self.driver,
-                &mut driver,
-                ra,
-                dec,
-                restore_state,
-            )?
-        };
-        waiter.await.unwrap()
+        self.slew_to_target_async().await?.await.unwrap()
+    }
+
+    async fn slew_to_target_with_lock(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
+    ) -> AscomResult<SlewTaskHandle> {
+        Self::check_state_for_slew(&state_lock.motor_state)?;
+
+        // Ensure target is set
+        let ra = state_lock.target.try_get_right_ascension()?;
+        let dec = state_lock.target.try_get_declination()?;
+
+        let after_state = state_lock.motor_state.as_after_slew_state();
+
+        let slew_task = Self::slew_to_coordinates_with_locks(
+            state_arc.clone(),
+            state_lock,
+            driver.clone(),
+            ra,
+            dec,
+            after_state,
+        )
+        .await?;
+
+        Ok(task::spawn(async {
+            let _cancelled = slew_task.await;
+            Ok(())
+        }))
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_target_async(&self) -> AscomResult<()> {
+    pub async fn slew_to_target_async(&self) -> AscomResult<SlewTaskHandle> {
         let mut state = self.state.write().await;
-        let mut driver = self.driver.lock().unwrap();
-        let restore_state = Self::check_current_state_for_slewing(&state.motion_state)?;
-        let ra = state.target.right_ascension;
-        let dec = state.target.declination;
-        Self::slew_to_coordinates_with_locks(
-            &self.state,
-            &mut state,
-            &self.driver,
-            &mut driver,
-            ra,
-            dec,
-            restore_state,
-        )?;
+        Self::slew_to_target_with_lock(self.state.clone(), &mut state, self.driver.clone()).await
+    }
+
+    /// Ensures not parked or slewing and cancels guiding
+    /// Returns a restorable state
+    fn check_state_for_slew(motor_state: &MotorState) -> AscomResult<()> {
+        if motor_state.is_parked() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidWhileParked,
+                "Can't slew while parked".to_string(),
+            ));
+        }
+
+        if motor_state.is_slewing() && !motor_state.is_settling() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
+                "Already Slewing".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }

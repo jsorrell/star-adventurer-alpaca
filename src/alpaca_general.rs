@@ -1,7 +1,7 @@
 use crate::request::*;
 use crate::util::*;
 use crate::AlpacaState;
-use crate::{get_sa, response};
+use crate::{response, Config, StarAdventurer};
 use proc_macros::alpaca_handler;
 use rocket::State;
 
@@ -51,11 +51,22 @@ pub async fn put_connected(data: SetConnectedData, state: &AlpacaState) -> Ascom
     match (&*sa, data.connected) {
         (Some(_), false) => {
             *sa = {
-                println!("Disconnecting");
+                log::warn!("Disconnecting");
                 None
             }
         }
-        (None, true) => *sa = Some(get_sa().await?),
+        (None, true) => {
+            let config: Config =
+                confy::load_path("config.toml").expect("Couldn't parse connection configuration");
+            let v = StarAdventurer::new(&config).await;
+            if let Err(e) = v {
+                log::error!("Couldn't connect to StarAdventurer: {}", &e);
+                return Err(e);
+            } else {
+                log::info!("Connected")
+            }
+            *sa = Some(v.unwrap())
+        }
         _ => (),
     };
 
@@ -78,16 +89,16 @@ pub async fn get_driver_version(_state: &AlpacaState) -> AscomResult<&'static st
 }
 
 #[alpaca_handler]
-pub async fn get_interface_version(_state: &AlpacaState) -> AscomResult<&'static str> {
-    Ok("6.5")
+pub async fn get_interface_version(_state: &AlpacaState) -> AscomResult<i32> {
+    Ok(3)
 }
 
 #[alpaca_handler]
-pub async fn get_name(_state: &State<AlpacaState>) -> AscomResult<&'static str> {
+pub async fn get_name(_state: &AlpacaState) -> AscomResult<&'static str> {
     Ok("StarAdventurer")
 }
 
 #[alpaca_handler]
-pub async fn get_supported_actions(_state: &State<AlpacaState>) -> AscomResult<&[&str]> {
+pub async fn get_supported_actions(_state: &AlpacaState) -> AscomResult<&[&str]> {
     Ok(&[])
 }

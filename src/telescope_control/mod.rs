@@ -1,4 +1,5 @@
 pub mod config;
+mod driver;
 pub mod guide;
 pub mod observing_pos;
 pub mod parking;
@@ -9,20 +10,18 @@ pub mod target;
 pub(in crate::telescope_control) mod test_util;
 pub mod tracking;
 
-use crate::util::enums::*;
-use crate::util::result::*;
+use crate::rotation_direction::RotationDirectionKey;
+use crate::telescope_control::driver::{Driver, DriverBuilder, Status};
+use crate::util::*;
 use config::{Config, TelescopeDetails};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use synscan;
-use synscan::motors::DriveMode;
-use synscan::result::SynScanError;
-use synscan::util::{AutoGuideSpeed, SingleChannel};
+use synscan::AutoGuideSpeed;
 use target::Target;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{oneshot, RwLock};
 use tokio::task;
 
-const RA_CHANNEL: &SingleChannel = &SingleChannel::Channel1;
+type StateArc = Arc<RwLock<State>>;
 
 #[derive(Debug)]
 pub(in crate::telescope_control) struct State {
@@ -37,85 +36,39 @@ pub(in crate::telescope_control) struct State {
     pier_side: PierSide,
 
     tracking_rate: TrackingRate,
-    post_slew_settle_time: f64,
+    post_slew_settle_time: u32,
+    rotation_direction_key: RotationDirectionKey,
     target: Target,
-    motion_state: MotionState,
+    motor_state: MotorState,
     autoguide_speed: AutoGuideSpeed,
 }
 
 pub struct StarAdventurer {
-    driver: Arc<Mutex<synscan::MotorController<'static>>>,
+    driver: Driver,
     telescope_details: TelescopeDetails,
-    state: Arc<RwLock<State>>,
+    state: StateArc,
 }
 
 impl StarAdventurer {
     pub async fn new(config: &Config) -> AscomResult<Self> {
-        let mut driver = synscan::MotorController::new(
-            config.com_settings.path.as_str(),
-            config.com_settings.baud_rate,
-            Duration::from_millis(config.com_settings.timeout_millis as u64),
-        )?;
-        let motor_params = *driver.get_motor_parameters();
-        let status = driver.get_status(RA_CHANNEL)?;
-        let step_period = driver.get_step_period(RA_CHANNEL)?;
+        let mut db = DriverBuilder::new().with_timeout(Duration::from_millis(
+            config.com_settings.timeout_millis as u64,
+        ));
 
-        let mut tracking_rate = TrackingRate::Sidereal;
-        let mut is_goto_slewing = false;
-        let mut goto_slewing_target = 0.;
+        if config.com_settings.path.is_some() {
+            db = db.with_path(config.com_settings.path.clone().unwrap());
+        }
 
-        let motion_state = match status.mode {
-            DriveMode::Tracking => {
-                match TrackingRate::determine_from_period(
-                    step_period,
-                    motor_params.get_timer_interrupt_frequency(),
-                    motor_params.get_counts_per_revolution(*RA_CHANNEL),
-                ) {
-                    Some(rate) => {
-                        tracking_rate = rate;
-                    }
-                    None => {
-                        tracking_rate = TrackingRate::Sidereal;
-                        driver.set_step_period(
-                            RA_CHANNEL,
-                            TrackingRate::Sidereal.determine_step_period(
-                                motor_params.get_timer_interrupt_frequency(),
-                                motor_params.get_counts_per_revolution(*RA_CHANNEL),
-                            ),
-                        )?
-                    }
-                };
+        let driver = db.create();
 
-                if status.running {
-                    MotionState::Tracking(TrackingState::Tracking(None))
-                } else {
-                    MotionState::Tracking(TrackingState::Stationary(false))
-                }
-            }
-            DriveMode::Goto => {
-                if status.running {
-                    goto_slewing_target = driver.get_goto_target(RA_CHANNEL)?;
-                    is_goto_slewing = true;
+        if let Err(e) = driver {
+            // TODO Invalid value?
+            return AscomResult::Err(AscomError::from_msg(AscomErrorType::InvalidValue, e));
+        }
 
-                    // placeholder until we have state object
-                    MotionState::Tracking(TrackingState::Stationary(false))
-                } else {
-                    let direction =
-                        Self::get_tracking_direction(config.observation_location.latitude);
-                    driver.set_motion_mode(RA_CHANNEL, DriveMode::Tracking, false, direction)?;
-                    driver.set_step_period(
-                        RA_CHANNEL,
-                        tracking_rate.determine_step_period(
-                            motor_params.get_timer_interrupt_frequency(),
-                            motor_params.get_counts_per_revolution(*RA_CHANNEL),
-                        ),
-                    )?;
-                    MotionState::Tracking(TrackingState::Stationary(false))
-                }
-            }
-        };
+        let driver = driver.unwrap();
 
-        driver.set_autoguide_speed(RA_CHANNEL, AutoGuideSpeed::Half)?;
+        driver.set_autoguide_speed(AutoGuideSpeed::Half).await?;
 
         let state = State {
             observation_location: config.observation_location,
@@ -123,44 +76,90 @@ impl StarAdventurer {
             declination: 0.0, // Set only by sync or goto
             hour_angle_offset: 0.0, // Set only by sync or goto
             autoguide_speed: AutoGuideSpeed::Half, // Write only, so default to half b/c most standard
-            pier_side: PierSide::Unknown,          // TODO use this?
-            date_offset: chrono::Duration::zero(), // Assume using actual time
-            post_slew_settle_time: 0.0,            // Default to zero
-            target: Default::default(),            // No target initially
-            tracking_rate,
-            motion_state,
+            pier_side: PierSide::East,             // TODO use this?
+            date_offset: chrono::Duration::zero(), // Assume using computer time
+            post_slew_settle_time: 1,
+            rotation_direction_key: RotationDirectionKey::from_latitude(
+                config.observation_location.latitude,
+            ),
+            target: Target::default(), // No target initially
+            tracking_rate: TrackingRate::Sidereal,
+            motor_state: MotorState::Stationary(StationaryState::Parked), // temporary value
         };
 
-        let driver_arc = Arc::new(Mutex::new(driver));
-        let state_arc = Arc::new(RwLock::new(state));
-
-        // Spawn task to track goto position
-        if is_goto_slewing {
-            let state_arc_clone = state_arc.clone();
-            let mut state_lock = state_arc_clone.write().await;
-            let (cancel_tx, cancel_rx) = watch::channel(false);
-            let _goto_task = task::spawn(Self::goto_task(
-                state_arc.clone(),
-                driver_arc.clone(),
-                cancel_rx,
-            ));
-            state_lock.motion_state = MotionState::Slewing(SlewingState::GotoSlewing(
-                goto_slewing_target,
-                TrackingState::Stationary(false),
-                cancel_tx,
-            ));
-        }
-
-        Ok(StarAdventurer {
-            driver: driver_arc,
-            state: state_arc,
+        let sa = StarAdventurer {
+            driver,
+            state: Arc::new(RwLock::new(state)),
             telescope_details: config.telescope_details,
-        })
+        };
+
+        sa.determine_state_from_driver().await?;
+
+        Ok(sa)
+    }
+
+    pub async fn determine_state_from_driver(&self) -> AscomResult<()> {
+        let mut state = self.state.write().await;
+        let status = self.driver.get_status().await?;
+
+        match status {
+            Status::Slewing(target) => {
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                let goto_complete = self.driver.clone().track_goto();
+                state.motor_state =
+                    MotorState::Moving(MovingState::Slewing(SlewingState::Gotoing {
+                        destination: target,
+                        canceller: cancel_tx,
+                        after_state: AfterSlewState::Stationary,
+                    }));
+                task::spawn(Self::complete_slew(
+                    self.state.clone(),
+                    self.driver.clone(),
+                    cancel_rx,
+                    goto_complete,
+                ));
+            }
+            Status::Moving(direction) => {
+                let tracking_rate = self.driver.determine_tracking_rate().await?;
+                if direction == Self::get_tracking_direction(state.observation_location.latitude)
+                    && tracking_rate.is_a()
+                {
+                    state.tracking_rate = tracking_rate.get_a().unwrap();
+                    state.motor_state = MotorState::Moving(MovingState::Constant {
+                        state: ConstantMotionState::Tracking,
+                        guiding_state: GuidingState::Idle,
+                        motion_rate: MotionRate::new(state.tracking_rate.into(), direction),
+                    });
+                } else {
+                    let rate = tracking_rate
+                        .get_b()
+                        .unwrap_or_else(|| tracking_rate.get_a().unwrap().into());
+                    state.motor_state = MotorState::Moving(MovingState::Constant {
+                        state: ConstantMotionState::MoveAxis {
+                            after_state: AfterSlewState::Stationary,
+                        },
+                        guiding_state: GuidingState::Idle,
+                        motion_rate: MotionRate::new(rate, direction),
+                    });
+                }
+            }
+            Status::Stationary => {
+                state.tracking_rate = self
+                    .driver
+                    .determine_tracking_rate()
+                    .await?
+                    .a_or(state.tracking_rate);
+                state.motor_state =
+                    MotorState::Stationary(StationaryState::Unparked(GuidingState::Idle));
+            }
+        };
+
+        Ok(())
     }
 
     /// Returns the alignment mode of the mount (Alt/Az, Polar, German Polar)
     pub async fn get_alignment_mode(&self) -> AscomResult<AlignmentMode> {
-        return Ok(AlignmentMode::GermanPolar);
+        Ok(AlignmentMode::GermanPolar)
     }
 
     /// Returns the current equatorial coordinate system used by this telescope (e.g. Topocentric or J2000).
@@ -170,30 +169,32 @@ impl StarAdventurer {
 
     /// The telescope's effective aperture diameter (meters)
     pub async fn get_aperture(&self) -> AscomResult<f64> {
-        self.telescope_details.aperture.ok_or(AscomError::from_msg(
-            AscomErrorType::ValueNotSet,
-            format!("Aperture not defined"),
-        ))
+        self.telescope_details.aperture.ok_or_else(|| {
+            AscomError::from_msg(
+                AscomErrorType::ValueNotSet,
+                "Aperture not defined".to_string(),
+            )
+        })
     }
 
     /// The area of the telescope's aperture, taking into account any obstructions (square meters)
     pub async fn get_aperture_area(&self) -> AscomResult<f64> {
-        self.telescope_details
-            .aperture_area
-            .ok_or(AscomError::from_msg(
+        self.telescope_details.aperture_area.ok_or_else(|| {
+            AscomError::from_msg(
                 AscomErrorType::ValueNotSet,
-                format!("Aperture area not defined"),
-            ))
+                "Aperture area not defined".to_string(),
+            )
+        })
     }
 
     /// The telescope's focal length in meters
     pub async fn get_focal_length(&self) -> AscomResult<f64> {
-        self.telescope_details
-            .focal_length
-            .ok_or(AscomError::from_msg(
+        self.telescope_details.focal_length.ok_or_else(|| {
+            AscomError::from_msg(
                 AscomErrorType::ValueNotSet,
-                format!("Focal length not defined"),
-            ))
+                "Focal length not defined".to_string(),
+            )
+        })
     }
 
     /// True if the mount is stopped in the Home position. Set only following a FindHome() operation, and reset with any slew operation.
@@ -211,8 +212,8 @@ impl StarAdventurer {
     pub async fn set_does_refraction(&self, _does_refraction: bool) -> AscomResult<()> {
         // TODO implement these?
         Err(AscomError::from_msg(
-            AscomErrorType::ActionNotImplemented,
-            format!("Refraction calculations not available"),
+            AscomErrorType::PropertyOrMethodNotImplemented,
+            "Refraction calculations not available".to_string(),
         ))
     }
 
@@ -229,19 +230,8 @@ impl StarAdventurer {
     /// Sets the pointing state of the mount
     pub async fn set_side_of_pier(&self, _side: PierSide) -> AscomResult<()> {
         Err(AscomError::from_msg(
-            AscomErrorType::ActionNotImplemented,
-            format!("Side of pier control not implemented"),
+            AscomErrorType::PropertyOrMethodNotImplemented,
+            "Side of pier control not implemented".to_string(),
         ))
-    }
-
-    pub async fn is_connected(&self) -> AscomResult<bool> {
-        let _state = self.state.read().await;
-        let mut driver = self.driver.lock().unwrap();
-
-        match driver.test_com() {
-            Ok(()) => Ok(true),
-            Err(SynScanError::CommunicationError(_)) => Ok(false),
-            Err(e) => Err(AscomError::from(e)),
-        }
     }
 }

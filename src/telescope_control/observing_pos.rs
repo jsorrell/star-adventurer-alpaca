@@ -1,7 +1,8 @@
-use crate::astro_math::{Degrees, Hours};
+use crate::util::*;
 use crate::{astro_math, StarAdventurer};
 use chrono::{DateTime, Utc};
 use tokio::join;
+use crate::rotation_direction::RotationDirectionKey;
 
 use crate::util::result::{AscomError, AscomErrorType, AscomResult};
 
@@ -41,6 +42,16 @@ impl StarAdventurer {
 
     /// Sets the observing site's latitude (degrees).
     pub async fn set_latitude(&self, latitude: Degrees) -> AscomResult<()> {
+        if latitude < -90. || 90. < latitude {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
+                format!(
+                    "Latitude of {} is outside the valid range of -90 to 90",
+                    latitude
+                ),
+            ));
+        }
+        self.state.write().await.rotation_direction_key = RotationDirectionKey::from_latitude(latitude);
         self.state.write().await.observation_location.latitude = latitude;
         Ok(())
     }
@@ -54,6 +65,15 @@ impl StarAdventurer {
 
     /// Sets the observing site's longitude (degrees, positive East, WGS84).
     pub async fn set_longitude(&self, longitude: Degrees) -> AscomResult<()> {
+        if longitude < -180. || 180. < longitude {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidValue,
+                format!(
+                    "Longitude of {} is outside the valid range of -180 to 180",
+                    longitude
+                ),
+            ));
+        }
         self.state.write().await.observation_location.longitude = longitude;
         Ok(())
     }
