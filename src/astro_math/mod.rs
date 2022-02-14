@@ -127,10 +127,13 @@ pub fn calculate_az_from_ha_dec(ha: Hours, dec: Degrees, lat: Degrees) -> Degree
     let alt = deg_to_rad(calculate_alt_from_ha_dec(ha, dec, lat));
     let ha = hours_to_rad(ha);
     let dec = deg_to_rad(dec);
+    let lat = deg_to_rad(lat);
 
-    let a = rad_to_deg((-ha.sin() * dec.cos() / alt.cos()).asin()) as Degrees;
-    if 0. < ha.cos() {
-        180. - a
+    let a = rad_to_deg(((dec.sin() - alt.sin() * lat.sin()) / (alt.cos() * lat.cos())).acos())
+        as Degrees;
+
+    if 0. < ha.sin() {
+        360. - a
     } else {
         a
     }
