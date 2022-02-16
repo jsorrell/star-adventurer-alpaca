@@ -6,6 +6,7 @@ pub mod pointing_pos;
 pub mod slew;
 pub mod sync;
 pub mod target;
+#[cfg(test)]
 pub(in crate::telescope_control) mod test_util;
 pub mod tracking;
 
