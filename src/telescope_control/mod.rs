@@ -78,7 +78,7 @@ impl StarAdventurer {
             autoguide_speed: AutoGuideSpeed::Half, // Write only, so default to half b/c most standard
             pier_side: PierSide::East,             // TODO use this?
             date_offset: chrono::Duration::zero(), // Assume using computer time
-            post_slew_settle_time: 1,
+            post_slew_settle_time: config.other_settings.slew_settle_time,
             rotation_direction_key: RotationDirectionKey::from_latitude(
                 config.observation_location.latitude,
             ),
