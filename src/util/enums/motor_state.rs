@@ -212,7 +212,6 @@ pub enum MovingState {
 
 #[derive(Debug)]
 pub enum SlewingState {
-    // Target rotation
     Gotoing {
         destination: Degrees,
         canceller: TaskCanceller,

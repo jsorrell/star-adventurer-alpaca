@@ -151,7 +151,7 @@ impl StarAdventurer {
             ));
         }
 
-        if state.motor_state.is_slewing() {
+        if state.is_slewing() {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidOperation,
                 "Can't guide while slewing".to_string(),

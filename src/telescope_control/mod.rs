@@ -1,4 +1,3 @@
-pub mod config;
 mod driver;
 pub mod guide;
 pub mod observing_pos;
@@ -10,10 +9,11 @@ pub mod target;
 pub(in crate::telescope_control) mod test_util;
 pub mod tracking;
 
+use crate::config;
+use crate::config::{Config, TelescopeDetails};
 use crate::rotation_direction::RotationDirectionKey;
 use crate::telescope_control::driver::{Driver, DriverBuilder, Status};
 use crate::util::*;
-use config::{Config, TelescopeDetails};
 use std::sync::Arc;
 use std::time::Duration;
 use synscan::AutoGuideSpeed;
@@ -22,6 +22,12 @@ use tokio::sync::{oneshot, RwLock};
 use tokio::task;
 
 type StateArc = Arc<RwLock<State>>;
+
+#[derive(Debug)]
+pub enum DeclinationSlew {
+    Waiting(tokio::sync::oneshot::Sender<()>),
+    Idle,
+}
 
 #[derive(Debug)]
 pub(in crate::telescope_control) struct State {
@@ -39,14 +45,24 @@ pub(in crate::telescope_control) struct State {
     post_slew_settle_time: u32,
     rotation_direction_key: RotationDirectionKey,
     target: Target,
+
+    declination_slew: DeclinationSlew,
     motor_state: MotorState,
     autoguide_speed: AutoGuideSpeed,
+}
+
+impl State {
+    pub fn is_slewing(&self) -> bool {
+        matches!(self.declination_slew, DeclinationSlew::Waiting(..))
+            || self.motor_state.is_slewing()
+    }
 }
 
 pub struct StarAdventurer {
     driver: Driver,
     telescope_details: TelescopeDetails,
     state: StateArc,
+    dec_slew_block: bool,
 }
 
 impl StarAdventurer {
@@ -85,12 +101,14 @@ impl StarAdventurer {
             target: Target::default(), // No target initially
             tracking_rate: TrackingRate::Sidereal,
             motor_state: MotorState::Stationary(StationaryState::Parked), // temporary value
+            declination_slew: DeclinationSlew::Idle,
         };
 
         let sa = StarAdventurer {
             driver,
             state: Arc::new(RwLock::new(state)),
             telescope_details: config.telescope_details,
+            dec_slew_block: config.other_settings.dec_slew_block,
         };
 
         sa.determine_state_from_driver().await?;

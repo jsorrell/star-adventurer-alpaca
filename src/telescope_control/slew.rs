@@ -1,29 +1,24 @@
 use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::driver::Driver;
-use crate::telescope_control::{StarAdventurer, State, StateArc};
+use crate::telescope_control::{DeclinationSlew, StarAdventurer, State, StateArc};
 use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 use crate::{astro_math, AxisRateRange};
+use rocket::futures::join;
 use std::future::Future;
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLockWriteGuard};
 use tokio::task::JoinHandle;
-use tokio::{task, time};
+use tokio::{sync, task, time};
 
-type SlewTaskHandle = JoinHandle<AscomResult<()>>;
-
-#[derive(Debug)]
-pub(in crate::telescope_control) enum CompletionResult<T> {
-    Completed(T),
-    Cancelled,
-}
+type SlewTaskHandle = JoinHandle<()>;
 
 impl StarAdventurer {
     /// True if telescope is currently moving in response to one of the Slew methods or the MoveAxis(TelescopeAxes, Double) method
     /// False at all other times.
     pub async fn is_slewing(&self) -> AscomResult<bool> {
         let state = self.state.read().await;
-        Ok(state.motor_state.is_slewing() || state.motor_state.is_manually_moving_axis())
+        Ok(state.is_slewing() || state.motor_state.is_manually_moving_axis())
     }
 
     /// Returns the post-slew settling time (sec.)
@@ -34,6 +29,11 @@ impl StarAdventurer {
     /// Sets the post-slew settling time (integer sec.).
     pub async fn set_slew_settle_time(&self, time: u32) -> AscomResult<()> {
         self.state.write().await.post_slew_settle_time = time;
+        Ok(())
+    }
+
+    pub async fn complete_dec_slew(&self) -> AscomResult<()> {
+        self.state.write().await.declination_slew = DeclinationSlew::Idle;
         Ok(())
     }
 
@@ -77,23 +77,24 @@ impl StarAdventurer {
             ));
         }
 
+        state.declination_slew = DeclinationSlew::Idle;
+
         // Nothing to do if not slewing
-        if !(state.motor_state.is_slewing() || state.motor_state.is_manually_moving_axis()) {
+        if !(state.is_slewing() || state.motor_state.is_manually_moving_axis()) {
             return Ok(());
         }
 
         // Nothing to do if already stopping
         if state.motor_state.slew_is_stopping() {
-            // // wait for stop
-            // driver.clone().wait_for_stop().await;
-            // the slew task handles restoring the state
-
             // TODO no great way to know when we've stopped -- can implement with signals if necessary
             // return immediately for now
             return Ok(());
         }
 
-        let after_state = state.motor_state.as_after_slew_state();
+        let after_state = state
+            .motor_state
+            .get_after_state()
+            .expect("Expected restorable state when aborting slew.");
 
         if state.motor_state.is_moving() {
             // Stop slew
@@ -184,7 +185,7 @@ impl StarAdventurer {
         }
 
         let mut state = self.state.write().await;
-        Self::check_state_for_slew(&state.motor_state)?;
+        Self::check_state_for_slew(&state)?;
 
         let current_rate = state.motor_state.determine_motion_rate();
         let target_direction = if rate < 0. {
@@ -218,11 +219,10 @@ impl StarAdventurer {
         driver: Driver,
         cancel_rx: oneshot::Receiver<()>,
         goto_complete: impl Future<Output = impl Future<Output = ()>>,
-    ) -> CompletionResult<()> {
+    ) -> () {
         tokio::select! {
             _ = cancel_rx => {
                 log::info!("Slew task cancelled");
-                CompletionResult::Cancelled
             },
             stop_complete = goto_complete => {
                 // Stop
@@ -242,7 +242,7 @@ impl StarAdventurer {
                     tokio::select! {
                         _ = cancel_rx => {
                             log::info!("Settle task cancelled");
-                            return CompletionResult::Cancelled
+                            return
                         }
                         _ = settled => {}
                     };
@@ -252,7 +252,6 @@ impl StarAdventurer {
 
                 // Restore
                 Self::restore_state_after_slew(after_state, &mut state, driver).await;
-                CompletionResult::Completed(())
             }
         }
     }
@@ -265,7 +264,7 @@ impl StarAdventurer {
         driver: Driver,
         pos: Degrees,
         after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+    ) -> AscomResult<impl Future<Output = ()>> {
         let goto_complete = driver.clone().goto_async(pos).await?;
 
         let (canceller, cancel_rx) = oneshot::channel();
@@ -288,7 +287,7 @@ impl StarAdventurer {
         driver: Driver,
         target_angle: Degrees,
         after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+    ) -> AscomResult<impl Future<Output = ()>> {
         let cur_pos = driver.get_pos().await?;
         let cur_angle = astro_math::modulo(cur_pos, 360.);
 
@@ -320,7 +319,7 @@ impl StarAdventurer {
         driver: Driver,
         hour_angle: Hours,
         after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+    ) -> AscomResult<impl Future<Output = ()>> {
         let target_angle = astro_math::hours_to_deg(hour_angle - state_lock.hour_angle_offset);
         Self::slew_motor_to_angle(state_arc, state_lock, driver, target_angle, after_state).await
     }
@@ -352,18 +351,29 @@ impl StarAdventurer {
         target_hour_angle: Hours,
         target_declination: Degrees,
         after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
-        Self::alert_user_to_change_declination(state_lock.declination, target_declination);
-        state_lock.declination = target_declination;
+        dec_slew_block: bool,
+    ) -> AscomResult<impl Future<Output = ()>> {
+        let (tx, rx) = sync::oneshot::channel();
 
-        Self::slew_motor_to_hour_angle(
+        if dec_slew_block {
+            state_lock.declination_slew = DeclinationSlew::Waiting(tx);
+        } else {
+            Self::alert_user_to_change_declination(state_lock.declination, target_declination);
+            state_lock.declination = target_declination;
+        }
+
+        let motor_slew_future = Self::slew_motor_to_hour_angle(
             state_arc,
             state_lock,
             driver,
             target_hour_angle,
             after_state,
         )
-        .await
+        .await?;
+
+        return Ok(async {
+            let _ = join!(motor_slew_future, rx);
+        });
     }
 
     // TODO include estimated slew time in time calculations
@@ -374,7 +384,8 @@ impl StarAdventurer {
         ra: Hours,
         dec: Degrees,
         after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = CompletionResult<()>>> {
+        dec_slew_block: bool,
+    ) -> AscomResult<impl Future<Output = ()>> {
         let hour_angle = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state_lock.date_offset),
             state_lock.observation_location.longitude,
@@ -386,6 +397,7 @@ impl StarAdventurer {
             hour_angle,
             dec,
             after_state,
+            dec_slew_block,
         )
         .await
     }
@@ -397,10 +409,11 @@ impl StarAdventurer {
 
     /// Move the telescope to the given equatorial coordinates, return when slew is complete
     pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
-        self.slew_to_coordinates_async(ra, dec)
+        Ok(self
+            .slew_to_coordinates_async(ra, dec)
             .await?
             .await
-            .unwrap()
+            .unwrap())
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
@@ -421,7 +434,13 @@ impl StarAdventurer {
         let mut state = self.state.write().await;
         state.target.right_ascension = Some(ra);
         state.target.declination = Some(dec);
-        Self::slew_to_target_with_lock(self.state.clone(), &mut state, self.driver.clone()).await
+        Self::slew_to_target_with_lock(
+            self.state.clone(),
+            &mut state,
+            self.driver.clone(),
+            self.dec_slew_block,
+        )
+        .await
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
@@ -431,10 +450,7 @@ impl StarAdventurer {
 
     /// Move the telescope to the given local horizontal coordinates, return when slew is complete
     pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
-        log::warn!("Starting synchronous alt az slew");
-        self.slew_to_alt_az_async(alt, az).await?.await.unwrap()?;
-        log::warn!("Ending synchrnonous");
-        Ok(())
+        Ok(self.slew_to_alt_az_async(alt, az).await?.await.unwrap())
     }
 
     /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
@@ -453,7 +469,7 @@ impl StarAdventurer {
         check_az(az)?;
 
         let mut state = self.state.write().await;
-        Self::check_state_for_slew(&state.motor_state)?;
+        Self::check_state_for_slew(&state)?;
         let after_state = state.motor_state.as_after_slew_state();
 
         let (ha, dec) =
@@ -466,26 +482,25 @@ impl StarAdventurer {
             ha,
             dec,
             after_state,
+            self.dec_slew_block,
         )
         .await?;
 
-        Ok(task::spawn(async move {
-            let _cancelled = slew_task.await;
-            Ok(())
-        }))
+        Ok(task::spawn(slew_task))
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
     pub async fn slew_to_target(&self) -> AscomResult<()> {
-        self.slew_to_target_async().await?.await.unwrap()
+        Ok(self.slew_to_target_async().await?.await.unwrap())
     }
 
     async fn slew_to_target_with_lock(
         state_arc: StateArc,
         state_lock: &mut RwLockWriteGuard<'_, State>,
         driver: Driver,
+        dec_slew_block: bool,
     ) -> AscomResult<SlewTaskHandle> {
-        Self::check_state_for_slew(&state_lock.motor_state)?;
+        Self::check_state_for_slew(&state_lock)?;
 
         // Ensure target is set
         let ra = state_lock.target.try_get_right_ascension()?;
@@ -500,33 +515,37 @@ impl StarAdventurer {
             ra,
             dec,
             after_state,
+            dec_slew_block,
         )
         .await?;
 
-        Ok(task::spawn(async {
-            let _cancelled = slew_task.await;
-            Ok(())
-        }))
+        Ok(task::spawn(slew_task))
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
     pub async fn slew_to_target_async(&self) -> AscomResult<SlewTaskHandle> {
         let mut state = self.state.write().await;
-        Self::slew_to_target_with_lock(self.state.clone(), &mut state, self.driver.clone()).await
+        Self::slew_to_target_with_lock(
+            self.state.clone(),
+            &mut state,
+            self.driver.clone(),
+            self.dec_slew_block,
+        )
+        .await
     }
 
     /// Ensures not parked or slewing and cancels guiding
     /// Returns a restorable state
-    fn check_state_for_slew(motor_state: &MotorState) -> AscomResult<()> {
-        if motor_state.is_parked() {
+    fn check_state_for_slew(state: &RwLockWriteGuard<State>) -> AscomResult<()> {
+        if state.motor_state.is_parked() {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidWhileParked,
                 "Can't slew while parked".to_string(),
             ));
         }
 
-        if motor_state.is_slewing() && !motor_state.is_settling() {
+        if state.is_slewing() && !state.motor_state.is_settling() {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidOperation,
                 "Already Slewing".to_string(),

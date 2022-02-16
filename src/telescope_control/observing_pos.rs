@@ -1,8 +1,8 @@
+use crate::rotation_direction::RotationDirectionKey;
 use crate::util::*;
 use crate::{astro_math, StarAdventurer};
 use chrono::{DateTime, Utc};
 use tokio::join;
-use crate::rotation_direction::RotationDirectionKey;
 
 use crate::util::result::{AscomError, AscomErrorType, AscomResult};
 
@@ -51,7 +51,8 @@ impl StarAdventurer {
                 ),
             ));
         }
-        self.state.write().await.rotation_direction_key = RotationDirectionKey::from_latitude(latitude);
+        self.state.write().await.rotation_direction_key =
+            RotationDirectionKey::from_latitude(latitude);
         self.state.write().await.observation_location.latitude = latitude;
         Ok(())
     }

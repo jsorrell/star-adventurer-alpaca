@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use proc_macros::alpaca_handler;
 use rocket::State;
 
+#[macro_export]
 macro_rules! try_connected {
     ($state:ident, $sa:ident, $stmts:block) => {{
         let sa = &*$state.sa.read().await;

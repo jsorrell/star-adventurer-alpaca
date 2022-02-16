@@ -56,4 +56,5 @@ pub struct TelescopeDetails {
 #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct OtherSettings {
     pub slew_settle_time: u32,
+    pub dec_slew_block: bool,
 }

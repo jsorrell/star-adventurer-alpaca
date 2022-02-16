@@ -1,5 +1,5 @@
-use super::config::Config;
 use super::StarAdventurer;
+use crate::config::Config;
 
 #[cfg(test)]
 pub(in crate::telescope_control) async fn create_sa(config: Option<Config>) -> StarAdventurer {

@@ -1,6 +1,6 @@
+use crate::rotation_direction::*;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::fmt::Formatter;
-use crate::rotation_direction::*;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Serialize_repr, Deserialize_repr, FromFormField)]
 #[repr(u8)]
@@ -44,9 +44,12 @@ impl RotationDirection for GuideDirection {
             (GuideDirection::West, RotationDirectionHemisphere::South) => CounterClockwise,
             (GuideDirection::East, RotationDirectionHemisphere::North) => CounterClockwise,
             (GuideDirection::East, RotationDirectionHemisphere::South) => Clockwise,
-            _ => panic!("Tried to get a rotation direction from {}", self)
+            _ => panic!("Tried to get a rotation direction from {}", self),
         };
 
-        ResolvedDirection{motor_direction: d, key}
+        ResolvedDirection {
+            motor_direction: d,
+            key,
+        }
     }
 }

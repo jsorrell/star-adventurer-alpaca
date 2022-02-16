@@ -1,17 +1,25 @@
 use crate::request::*;
 use crate::util::*;
-use crate::AlpacaState;
 use crate::{response, StarAdventurer};
+use crate::{try_connected, AlpacaState};
 use proc_macros::alpaca_handler;
 use rocket::State;
 
 /* Action */
 #[alpaca_handler]
-pub async fn put_action(_data: ActionData, _state: &AlpacaState) -> AscomResult<String> {
-    Err(AscomError::from_msg(
-        AscomErrorType::ActionNotImplemented,
-        "No custom actions".to_string(),
-    ))
+pub async fn put_action(data: ActionData, state: &AlpacaState) -> AscomResult<String> {
+    match &*data.action {
+        "complete_dec_slew" => {
+            try_connected!(state, sa, {
+                sa.complete_dec_slew().await?;
+                Ok("".to_string())
+            })
+        }
+        _ => Err(AscomError::from_msg(
+            AscomErrorType::ActionNotImplemented,
+            "Action not implemented".to_string(),
+        )),
+    }
 }
 
 /* Command */

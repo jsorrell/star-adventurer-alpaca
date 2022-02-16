@@ -1,5 +1,4 @@
 use crate::astro_math;
-use crate::telescope_control::slew::CompletionResult;
 use crate::telescope_control::StarAdventurer;
 use crate::util::*;
 
@@ -43,7 +42,7 @@ impl StarAdventurer {
             return Ok(());
         }
 
-        if state.motor_state.is_slewing() {
+        if state.is_slewing() {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidOperation,
                 "Can't park while slewing".to_string(),
@@ -75,10 +74,9 @@ impl StarAdventurer {
 
         std::mem::drop(state);
 
-        match slew_task.await {
-            CompletionResult::Completed(()) => Ok(()),
-            CompletionResult::Cancelled => Ok(()), // TODO Should this be success or failure?
-        }
+        slew_task.await;
+
+        Ok(())
     }
 
     /// Takes telescope out of the Parked state.
