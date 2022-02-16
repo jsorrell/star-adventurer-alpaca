@@ -1,7 +1,7 @@
 use crate::request::*;
 use crate::util::*;
 use crate::AlpacaState;
-use crate::{response, Config, StarAdventurer};
+use crate::{response, StarAdventurer};
 use proc_macros::alpaca_handler;
 use rocket::State;
 
@@ -56,9 +56,7 @@ pub async fn put_connected(data: SetConnectedData, state: &AlpacaState) -> Ascom
             }
         }
         (None, true) => {
-            let config: Config =
-                confy::load_path("config.toml").expect("Couldn't parse connection configuration");
-            let v = StarAdventurer::new(&config).await;
+            let v = StarAdventurer::new(&state.config).await;
             if let Err(e) = v {
                 log::error!("Couldn't connect to StarAdventurer: {}", &e);
                 return Err(e);

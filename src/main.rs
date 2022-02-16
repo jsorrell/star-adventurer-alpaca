@@ -24,6 +24,7 @@ extern crate rocket;
 pub struct AlpacaState {
     pub sa: RwLock<Option<StarAdventurer>>,
     pub sti: AtomicU32,
+    pub config: Config,
 }
 
 #[launch]
@@ -33,6 +34,7 @@ async fn rocket() -> Rocket<Build> {
     let state = AlpacaState {
         sa: RwLock::new(None),
         sti: AtomicU32::new(0),
+        config: confy::load_path("config.toml").expect("Couldn't parse configuration"),
     };
 
     rocket::build()
