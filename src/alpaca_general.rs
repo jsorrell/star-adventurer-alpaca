@@ -9,9 +9,15 @@ use rocket::State;
 #[alpaca_handler]
 pub async fn put_action(data: ActionData, state: &AlpacaState) -> AscomResult<String> {
     match &*data.action {
-        "complete_dec_slew" => {
+        "pending_declination_slew" => {
             try_connected!(state, sa, {
-                sa.complete_dec_slew().await?;
+                let change = sa.get_pending_dec_change().await;
+                Ok(change.to_string())
+            })
+        }
+        "complete_declination_slew" => {
+            try_connected!(state, sa, {
+                sa.complete_dec_slew().await;
                 Ok("".to_string())
             })
         }

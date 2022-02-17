@@ -32,9 +32,21 @@ impl StarAdventurer {
         Ok(())
     }
 
-    pub async fn complete_dec_slew(&self) -> AscomResult<()> {
-        self.state.write().await.declination_slew = DeclinationSlew::Idle;
-        Ok(())
+    pub async fn get_pending_dec_change(&self) -> Degrees {
+        if let DeclinationSlew::Waiting(d, _) = self.state.read().await.declination_slew {
+            d
+        } else {
+            0.
+        }
+    }
+
+    pub async fn complete_dec_slew(&self) {
+        let mut state = self.state.write().await;
+        if let DeclinationSlew::Waiting(d, _) = state.declination_slew {
+            state.declination += d;
+        }
+
+        state.declination_slew = DeclinationSlew::Idle;
     }
 
     async fn restore_state_after_slew(
