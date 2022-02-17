@@ -1,15 +1,15 @@
+use crate::astro_math::{deg_to_hours, hours_to_deg, modulo};
 use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::driver::Driver;
 use crate::telescope_control::{DeclinationSlew, StarAdventurer, State, StateArc};
 use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 use crate::{astro_math, AxisRateRange};
-use rocket::futures::join;
 use std::future::Future;
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLockWriteGuard};
 use tokio::task::JoinHandle;
-use tokio::{sync, task, time};
+use tokio::{join, sync, task, time};
 
 type SlewTaskHandle = JoinHandle<()>;
 
@@ -47,7 +47,7 @@ impl StarAdventurer {
                 .start_rotation(MotionRate::new(
                     state_lock.tracking_rate.into(),
                     TrackingDirection::WithTracking
-                        .using(state_lock.rotation_direction_key)
+                        .using(state_lock.observation_location.get_rotation_direction_key())
                         .into(),
                 ))
                 .await
@@ -60,7 +60,7 @@ impl StarAdventurer {
             after_state,
             state_lock.tracking_rate,
             TrackingDirection::WithTracking
-                .using(state_lock.rotation_direction_key)
+                .using(state_lock.observation_location.get_rotation_direction_key())
                 .into(),
         );
     }
@@ -160,6 +160,26 @@ impl StarAdventurer {
         ))
     }
 
+    /// Ensures not parked or slewing and cancels guiding
+    /// Returns a restorable state
+    fn check_state_for_slew(state: &RwLockWriteGuard<State>) -> AscomResult<()> {
+        if state.motor_state.is_parked() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidWhileParked,
+                "Can't slew while parked".to_string(),
+            ));
+        }
+
+        if state.is_slewing() && !state.motor_state.is_settling() {
+            return Err(AscomError::from_msg(
+                AscomErrorType::InvalidOperation,
+                "Already Slewing".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Move the telescope in one axis at the given rate.
     /// Rate in deg/sec
     /// TODO Does this stop other slewing? Returning an error for now
@@ -195,7 +215,9 @@ impl StarAdventurer {
         };
         let target_rate = MotionRate::new(
             rate.abs(),
-            target_direction.using(state.rotation_direction_key).into(),
+            target_direction
+                .using(state.observation_location.get_rotation_direction_key())
+                .into(),
         );
 
         let target_state = MotorState::Moving(MovingState::Constant {
@@ -280,55 +302,198 @@ impl StarAdventurer {
         Ok(complete_slew_future)
     }
 
-    /// Slews to closest version of given angle relative to where it started
-    pub(in crate::telescope_control) async fn slew_motor_to_angle(
+    async fn slew_motor_in_direction(
         state_arc: StateArc,
         state_lock: &mut RwLockWriteGuard<'_, State>,
         driver: Driver,
-        target_angle: Degrees,
+        distance: Hours,
+        direction: impl RotationDirection,
         after_state: AfterSlewState,
     ) -> AscomResult<impl Future<Output = ()>> {
+        let med: MotorEncodingDirection = direction
+            .using(state_lock.observation_location.get_rotation_direction_key())
+            .into();
+        let pos_offset = med.get_sign_f64() * hours_to_deg(distance);
         let cur_pos = driver.get_pos().await?;
-        let cur_angle = astro_math::modulo(cur_pos, 360.);
+        Self::slew_motor_to_pos(
+            state_arc,
+            state_lock,
+            driver,
+            cur_pos + pos_offset,
+            after_state,
+        )
+        .await
+    }
 
-        let target_angle = astro_math::modulo(target_angle, 360.);
+    // Positive if with tracking, negative if against
+    fn calculate_pos_change(ra_change: Hours, slew_speed: Degrees) -> (Hours, chrono::Duration) {
+        const INSTANT_DISTANCE: Hours = 0.1;
 
-        let no_overflow_distance = (target_angle - cur_angle).abs();
-        let overflow_distance = 360. - no_overflow_distance;
+        if ra_change.abs() < INSTANT_DISTANCE {
+            return (ra_change, chrono::Duration::zero());
+        }
 
-        let change = if overflow_distance < no_overflow_distance {
-            // go the overflow way
-            if cur_angle < target_angle {
-                -overflow_distance
+        let slew_speed_hours_per_hour = deg_to_hours(slew_speed) * 3600.;
+
+        // ALG FOR SLEW TIME ESTIMATION
+        // -----------------------------------
+        // pos_change = ra_change + dt
+        //
+        // dt = abs(pos_change) / slew_speed
+        //
+        // assume sign(ra_change) == sign(pos_change) (it will be unless INSTANT_DISTANCE is way too low)
+        // dt = (abs(ra_change) + dt) / slew_speed
+        // dt = abs(ra_change) / (slew_speed - 1)
+
+        let dt_hours = ra_change.abs() / (slew_speed_hours_per_hour - 1.) as Hours;
+        let pos_change = ra_change + dt_hours;
+        let dt_seconds = dt_hours * 3600.;
+
+        (
+            pos_change,
+            chrono::Duration::seconds(dt_seconds.round() as i64),
+        )
+    }
+
+    fn find_shortest_path_to_ha(
+        current_ha: Hours,
+        target_ha: Hours,
+        allow_meridian_flip: bool,
+    ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
+        let dist_with_tracking = modulo(target_ha - current_ha, 24.);
+        let dist_with_flip_with_tracking = modulo(target_ha - current_ha + 12., 24.);
+
+        let options = [
+            (
+                // Positive slew, no meridian flip
+                dist_with_tracking,
+                TrackingDirection::WithTracking,
+                false,
+                chrono::Duration::seconds(
+                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_WITH_TRACKING).round()
+                        as i64,
+                ),
+            ),
+            (
+                // Negative slew, no meridian flip
+                24. - dist_with_tracking,
+                TrackingDirection::AgainstTracking,
+                false,
+                chrono::Duration::seconds(
+                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_AGAINST_TRACKING).round()
+                        as i64,
+                ),
+            ),
+            (
+                // Positive slew, meridian flip
+                dist_with_flip_with_tracking,
+                TrackingDirection::WithTracking,
+                true,
+                chrono::Duration::seconds(
+                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_WITH_TRACKING).round()
+                        as i64,
+                ),
+            ),
+            (
+                // Negative slew, meridian flip
+                24. - dist_with_flip_with_tracking,
+                TrackingDirection::AgainstTracking,
+                true,
+                chrono::Duration::seconds(
+                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_AGAINST_TRACKING).round()
+                        as i64,
+                ),
+            ),
+        ];
+
+        options
+            .into_iter()
+            .filter(|a| allow_meridian_flip || !a.2)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+    }
+
+    fn find_shortest_path_to_ra(
+        current_ra: Hours,
+        target_ra: Hours,
+    ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
+        let dist_with_tracking = modulo(current_ra - target_ra, 24.);
+        let dist_with_flip_with_tracking = modulo(current_ra - target_ra + 12., 24.);
+
+        let options = [
+            {
+                // Positive slew, no meridian flip
+                let (change, duration) = Self::calculate_pos_change(
+                    dist_with_tracking,
+                    Driver::SLEW_SPEED_WITH_TRACKING,
+                );
+                (change, TrackingDirection::WithTracking, false, duration)
+            },
+            {
+                // Negative slew, no meridian flip
+                let (change, duration) = Self::calculate_pos_change(
+                    dist_with_tracking - 24.,
+                    Driver::SLEW_SPEED_AGAINST_TRACKING,
+                );
+                (
+                    change.abs(),
+                    TrackingDirection::AgainstTracking,
+                    false,
+                    duration,
+                )
+            },
+            {
+                // Positive slew, meridian flip
+                let (change, duration) = Self::calculate_pos_change(
+                    dist_with_flip_with_tracking,
+                    Driver::SLEW_SPEED_WITH_TRACKING,
+                );
+                (change, TrackingDirection::WithTracking, true, duration)
+            },
+            {
+                // Negative slew, meridian flip
+                let (change, duration) = Self::calculate_pos_change(
+                    dist_with_flip_with_tracking - 24.,
+                    Driver::SLEW_SPEED_AGAINST_TRACKING,
+                );
+                (
+                    change.abs(),
+                    TrackingDirection::AgainstTracking,
+                    true,
+                    duration,
+                )
+            },
+        ];
+
+        options
+            .into_iter()
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+    }
+
+    fn calculate_dec_change(
+        current_dec: Degrees,
+        target_dec: Degrees,
+        meridian_flip: bool,
+    ) -> Degrees {
+        if meridian_flip {
+            let through_north = 180. - (current_dec + target_dec);
+            let through_south = through_north - 360.;
+
+            if through_north.abs() < through_south.abs() {
+                through_north
             } else {
-                overflow_distance
+                through_south
             }
-        } else if cur_angle < target_angle {
-            no_overflow_distance
         } else {
-            -no_overflow_distance
-        };
-
-        Self::slew_motor_to_pos(state_arc, state_lock, driver, cur_pos + change, after_state).await
+            target_dec - current_dec
+        }
     }
 
-    /// Slews to closest version of given hour angle
-    async fn slew_motor_to_hour_angle(
-        state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
-        driver: Driver,
-        hour_angle: Hours,
-        after_state: AfterSlewState,
-    ) -> AscomResult<impl Future<Output = ()>> {
-        let target_angle = astro_math::hours_to_deg(hour_angle - state_lock.hour_angle_offset);
-        Self::slew_motor_to_angle(state_arc, state_lock, driver, target_angle, after_state).await
-    }
-
-    fn alert_user_to_change_declination(cur_declination: Degrees, target_declination: Degrees) {
+    fn alert_user_to_change_declination(dec_change: Degrees) {
         // Handle declination stuff
         // FIXME Better notification
         // FIXME Side of pier change?
-        let dec_change = target_declination - cur_declination;
         if dec_change != 0. {
             let dec_change_turns = dec_change / 2.957;
             // TODO List this in clockwise or ccw (depending on pier side)
@@ -344,40 +509,103 @@ impl StarAdventurer {
         }
     }
 
-    async fn slew_to_hour_angle_and_dec(
+    fn slew_dec_to_pos(
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        target_dec: Degrees,
+        meridian_flip: bool,
+        dec_slew_block: bool,
+    ) -> impl Future<Output = ()> {
+        let (tx, rx) = sync::oneshot::channel();
+
+        if target_dec != state_lock.declination || meridian_flip {
+            let dec_change =
+                Self::calculate_dec_change(state_lock.declination, target_dec, meridian_flip);
+            if dec_slew_block {
+                state_lock.declination_slew = DeclinationSlew::Waiting(dec_change, tx);
+            } else {
+                // Instant return
+                Self::alert_user_to_change_declination(dec_change);
+                state_lock.declination = target_dec;
+            }
+        }
+
+        if meridian_flip {
+            //TODO implement meridian flip logic
+        }
+
+        async move {
+            let _ = rx.await;
+        }
+    }
+
+    /// Same as slew to pos, but modulos and calculates shortest path
+    pub(in crate::telescope_control) async fn slew_motor_to_angle(
         state_arc: StateArc,
         state_lock: &mut RwLockWriteGuard<'_, State>,
         driver: Driver,
-        target_hour_angle: Hours,
-        target_declination: Degrees,
+        target_angle: Degrees,
         after_state: AfterSlewState,
-        dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
-        let (tx, rx) = sync::oneshot::channel();
+        let cur_pos = deg_to_hours(driver.get_pos().await?);
+        let target_pos = deg_to_hours(target_angle);
 
-        if dec_slew_block {
-            state_lock.declination_slew = DeclinationSlew::Waiting(tx);
-        } else {
-            Self::alert_user_to_change_declination(state_lock.declination, target_declination);
-            state_lock.declination = target_declination;
-        }
+        let (distance, direction, _, est_slew_time) =
+            Self::find_shortest_path_to_ha(cur_pos, target_pos, false);
 
-        let motor_slew_future = Self::slew_motor_to_hour_angle(
+        Self::slew_motor_in_direction(
             state_arc,
             state_lock,
             driver,
-            target_hour_angle,
+            distance,
+            direction,
+            after_state,
+        )
+        .await
+    }
+
+    async fn slew_to_ha_and_dec(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
+        ha: Hours,
+        dec: Degrees,
+        after_state: AfterSlewState,
+        dec_slew_block: bool,
+    ) -> AscomResult<impl Future<Output = ()>> {
+        /* RA */
+        let current_motor_pos = driver.get_pos().await?;
+        let current_ha = Self::get_hour_angle(
+            current_motor_pos,
+            state_lock.hour_angle_offset,
+            state_lock.observation_location.get_rotation_direction_key(),
+        );
+
+        // Find shortest path
+        let (distance, direction, meridian_flip, est_slew_time) =
+            Self::find_shortest_path_to_ha(current_ha, ha, true);
+
+        let motor_slew_future = Self::slew_motor_in_direction(
+            state_arc,
+            state_lock,
+            driver,
+            distance,
+            direction,
             after_state,
         )
         .await?;
 
+        /* Dec */
+
+        let dec_slew_future = Self::slew_dec_to_pos(state_lock, dec, meridian_flip, dec_slew_block);
+
+        /* Join */
+
         return Ok(async {
-            let _ = join!(motor_slew_future, rx);
+            let _ = join!(motor_slew_future, dec_slew_future);
         });
     }
 
-    // TODO include estimated slew time in time calculations
-    async fn slew_to_coordinates_with_locks(
+    async fn slew_to_ra_and_dec(
         state_arc: StateArc,
         state_lock: &mut RwLockWriteGuard<'_, State>,
         driver: Driver,
@@ -386,36 +614,94 @@ impl StarAdventurer {
         after_state: AfterSlewState,
         dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
-        let hour_angle = astro_math::calculate_local_sidereal_time(
+        /* RA */
+        let current_motor_pos = driver.get_pos().await?;
+        let current_ha = Self::get_hour_angle(
+            current_motor_pos,
+            state_lock.hour_angle_offset,
+            state_lock.observation_location.get_rotation_direction_key(),
+        );
+
+        let lst = astro_math::calculate_local_sidereal_time(
             Self::calculate_utc_date(state_lock.date_offset),
             state_lock.observation_location.longitude,
-        ) - ra;
-        Self::slew_to_hour_angle_and_dec(
+        );
+        let current_ra = Self::calculate_ra(lst, current_ha);
+
+        // Find shortest path
+        let (distance, direction, meridian_flip, est_slew_time) =
+            Self::find_shortest_path_to_ra(current_ra, ra);
+
+        let motor_slew_future = Self::slew_motor_in_direction(
             state_arc,
             state_lock,
             driver,
-            hour_angle,
+            distance,
+            direction,
+            after_state,
+        )
+        .await?;
+
+        /* Dec */
+
+        let dec_slew_future = Self::slew_dec_to_pos(state_lock, dec, meridian_flip, dec_slew_block);
+
+        /* Join */
+
+        return Ok(async {
+            let _ = join!(motor_slew_future, dec_slew_future);
+        });
+    }
+
+    async fn slew_to_target_with_lock(
+        state_arc: StateArc,
+        state_lock: &mut RwLockWriteGuard<'_, State>,
+        driver: Driver,
+        dec_slew_block: bool,
+    ) -> AscomResult<SlewTaskHandle> {
+        Self::check_state_for_slew(&state_lock)?;
+
+        // Ensure target is set
+        let ra = state_lock.target.try_get_right_ascension()?;
+        let dec = state_lock.target.try_get_declination()?;
+
+        let after_state = state_lock.motor_state.as_after_slew_state();
+
+        let slew_task = Self::slew_to_ra_and_dec(
+            state_arc.clone(),
+            state_lock,
+            driver.clone(),
+            ra,
             dec,
             after_state,
             dec_slew_block,
         )
+        .await?;
+
+        Ok(task::spawn(slew_task))
+    }
+
+    /* Target */
+
+    /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
+    /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
+    pub async fn slew_to_target_async(&self) -> AscomResult<SlewTaskHandle> {
+        let mut state = self.state.write().await;
+        Self::slew_to_target_with_lock(
+            self.state.clone(),
+            &mut state,
+            self.driver.clone(),
+            self.dec_slew_block,
+        )
         .await
     }
 
-    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
-    pub async fn can_slew(&self) -> AscomResult<bool> {
-        Ok(true)
+    /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
+    pub async fn slew_to_target(&self) -> AscomResult<()> {
+        Ok(self.slew_to_target_async().await?.await.unwrap())
     }
 
-    /// Move the telescope to the given equatorial coordinates, return when slew is complete
-    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
-        Ok(self
-            .slew_to_coordinates_async(ra, dec)
-            .await?
-            .await
-            .unwrap())
-    }
-
+    /* Coordinates */
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
     pub async fn can_slew_async(&self) -> AscomResult<bool> {
         Ok(true)
@@ -443,15 +729,21 @@ impl StarAdventurer {
         .await
     }
 
-    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
-    pub async fn can_slew_alt_az(&self) -> AscomResult<bool> {
+    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
+    pub async fn can_slew(&self) -> AscomResult<bool> {
         Ok(true)
     }
 
-    /// Move the telescope to the given local horizontal coordinates, return when slew is complete
-    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
-        Ok(self.slew_to_alt_az_async(alt, az).await?.await.unwrap())
+    /// Move the telescope to the given equatorial coordinates, return when slew is complete
+    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
+        Ok(self
+            .slew_to_coordinates_async(ra, dec)
+            .await?
+            .await
+            .unwrap())
     }
+
+    /* Alt Az */
 
     /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
     pub async fn can_slew_alt_az_async(&self) -> AscomResult<bool> {
@@ -475,7 +767,7 @@ impl StarAdventurer {
         let (ha, dec) =
             astro_math::calculate_ha_dec_from_alt_az(alt, az, state.observation_location.latitude);
 
-        let slew_task = Self::slew_to_hour_angle_and_dec(
+        let slew_task = Self::slew_to_ha_and_dec(
             self.state.clone(),
             &mut state,
             self.driver.clone(),
@@ -489,70 +781,14 @@ impl StarAdventurer {
         Ok(task::spawn(slew_task))
     }
 
-    /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
-    pub async fn slew_to_target(&self) -> AscomResult<()> {
-        Ok(self.slew_to_target_async().await?.await.unwrap())
+    /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
+    pub async fn can_slew_alt_az(&self) -> AscomResult<bool> {
+        Ok(true)
     }
 
-    async fn slew_to_target_with_lock(
-        state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
-        driver: Driver,
-        dec_slew_block: bool,
-    ) -> AscomResult<SlewTaskHandle> {
-        Self::check_state_for_slew(&state_lock)?;
-
-        // Ensure target is set
-        let ra = state_lock.target.try_get_right_ascension()?;
-        let dec = state_lock.target.try_get_declination()?;
-
-        let after_state = state_lock.motor_state.as_after_slew_state();
-
-        let slew_task = Self::slew_to_coordinates_with_locks(
-            state_arc.clone(),
-            state_lock,
-            driver.clone(),
-            ra,
-            dec,
-            after_state,
-            dec_slew_block,
-        )
-        .await?;
-
-        Ok(task::spawn(slew_task))
-    }
-
-    /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediatley after the slew starts
-    /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_target_async(&self) -> AscomResult<SlewTaskHandle> {
-        let mut state = self.state.write().await;
-        Self::slew_to_target_with_lock(
-            self.state.clone(),
-            &mut state,
-            self.driver.clone(),
-            self.dec_slew_block,
-        )
-        .await
-    }
-
-    /// Ensures not parked or slewing and cancels guiding
-    /// Returns a restorable state
-    fn check_state_for_slew(state: &RwLockWriteGuard<State>) -> AscomResult<()> {
-        if state.motor_state.is_parked() {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidWhileParked,
-                "Can't slew while parked".to_string(),
-            ));
-        }
-
-        if state.is_slewing() && !state.motor_state.is_settling() {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Already Slewing".to_string(),
-            ));
-        }
-
-        Ok(())
+    /// Move the telescope to the given local horizontal coordinates, return when slew is complete
+    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
+        Ok(self.slew_to_alt_az_async(alt, az).await?.await.unwrap())
     }
 }
 

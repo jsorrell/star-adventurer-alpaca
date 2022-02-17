@@ -1,4 +1,5 @@
 use crate::astro_math::Degrees;
+use crate::rotation_direction::RotationDirectionKey;
 use serde::{Deserialize, Serialize};
 
 /* Config */
@@ -32,6 +33,16 @@ pub struct ObservingLocation {
     pub latitude: Degrees,
     pub longitude: Degrees,
     pub elevation: f64,
+}
+
+impl ObservingLocation {
+    pub fn in_north(&self) -> bool {
+        return 0. < self.latitude;
+    }
+
+    pub fn get_rotation_direction_key(&self) -> RotationDirectionKey {
+        RotationDirectionKey::from_hemisphere(self.in_north())
+    }
 }
 
 impl Default for ObservingLocation {

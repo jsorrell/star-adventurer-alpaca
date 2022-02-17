@@ -1,21 +1,10 @@
-use crate::astro_math::Degrees;
 use crate::telescope_control::StarAdventurer;
 use crate::util::*;
-use synscan::Direction;
 
 impl StarAdventurer {
     /// True if the Tracking property can be changed, turning telescope sidereal tracking on and off.
     pub async fn can_set_tracking(&self) -> AscomResult<bool> {
         Ok(true)
-    }
-
-    #[inline]
-    pub(crate) fn get_tracking_direction(latitude: Degrees) -> Direction {
-        if Self::in_north(latitude) {
-            Direction::Clockwise
-        } else {
-            Direction::CounterClockwise
-        }
     }
 
     /// The right ascension tracking rate (arcseconds per second, default = 0.0)
@@ -143,7 +132,7 @@ impl StarAdventurer {
                 guiding_state: GuidingState::Idle,
                 motion_rate: state
                     .tracking_rate
-                    .into_motion_rate(state.rotation_direction_key),
+                    .into_motion_rate(state.observation_location.get_rotation_direction_key()),
             })
         } else {
             MotorState::Stationary(StationaryState::Unparked(GuidingState::Idle))

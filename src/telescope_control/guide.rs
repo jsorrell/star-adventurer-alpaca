@@ -166,7 +166,9 @@ impl StarAdventurer {
         }
 
         let guide_speed = state.autoguide_speed.multiplier() * Degrees::from(state.tracking_rate);
-        let guide_direction = guide_direction.using(state.rotation_direction_key).into();
+        let guide_direction = guide_direction
+            .using(state.observation_location.get_rotation_direction_key())
+            .into();
         let guide_rate = MotionRate::new(guide_speed, guide_direction);
 
         let current_motion_rate = state.motor_state.determine_motion_rate();

@@ -12,8 +12,9 @@ pub mod tracking;
 
 use crate::config;
 use crate::config::{Config, TelescopeDetails};
-use crate::rotation_direction::RotationDirectionKey;
+use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::driver::{Driver, DriverBuilder, Status};
+use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +27,7 @@ type StateArc = Arc<RwLock<State>>;
 
 #[derive(Debug)]
 pub enum DeclinationSlew {
-    Waiting(tokio::sync::oneshot::Sender<()>),
+    Waiting(Degrees, tokio::sync::oneshot::Sender<()>),
     Idle,
 }
 
@@ -37,14 +38,13 @@ pub(in crate::telescope_control) struct State {
 
     park_pos: Degrees,
     // Pos
-    hour_angle_offset: Hours, // pos+offset = ha
+    hour_angle_offset: Hours, // Hour angle at pos=0
     declination: Degrees,
 
     pier_side: PierSide,
 
     tracking_rate: TrackingRate,
     post_slew_settle_time: u32,
-    rotation_direction_key: RotationDirectionKey,
     target: Target,
 
     declination_slew: DeclinationSlew,
@@ -96,9 +96,6 @@ impl StarAdventurer {
             pier_side: PierSide::East,             // TODO use this?
             date_offset: chrono::Duration::zero(), // Assume using computer time
             post_slew_settle_time: config.other_settings.slew_settle_time,
-            rotation_direction_key: RotationDirectionKey::from_latitude(
-                config.observation_location.latitude,
-            ),
             target: Target::default(), // No target initially
             tracking_rate: TrackingRate::Sidereal,
             motor_state: MotorState::Stationary(StationaryState::Parked), // temporary value
@@ -140,7 +137,10 @@ impl StarAdventurer {
             }
             Status::Moving(direction) => {
                 let tracking_rate = self.driver.determine_tracking_rate().await?;
-                if direction == Self::get_tracking_direction(state.observation_location.latitude)
+                if direction
+                    == TrackingDirection::WithTracking
+                        .using(state.observation_location.get_rotation_direction_key())
+                        .into()
                     && tracking_rate.is_a()
                 {
                     state.tracking_rate = tracking_rate.get_a().unwrap();

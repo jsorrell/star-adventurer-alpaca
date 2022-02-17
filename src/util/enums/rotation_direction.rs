@@ -1,4 +1,3 @@
-use crate::Degrees;
 use synscan::Direction;
 pub use synscan::Direction::*;
 
@@ -12,8 +11,8 @@ pub(in crate::util::enums) enum RotationDirectionHemisphere {
 }
 
 impl RotationDirectionKey {
-    pub fn from_latitude(latitude: Degrees) -> Self {
-        if 0. < latitude {
+    pub fn from_hemisphere(in_north: bool) -> Self {
+        if in_north {
             RotationDirectionKey(RotationDirectionHemisphere::North)
         } else {
             RotationDirectionKey(RotationDirectionHemisphere::South)

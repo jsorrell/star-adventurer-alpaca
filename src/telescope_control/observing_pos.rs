@@ -1,4 +1,3 @@
-use crate::rotation_direction::RotationDirectionKey;
 use crate::util::*;
 use crate::{astro_math, StarAdventurer};
 use chrono::{DateTime, Utc};
@@ -30,11 +29,6 @@ impl StarAdventurer {
 
     /*** Latitude ***/
 
-    #[inline]
-    pub(crate) fn in_north(latitude: Degrees) -> bool {
-        0. <= latitude
-    }
-
     /// The geodetic(map) latitude (degrees, positive North, WGS84) of the site at which the telescope is located.
     pub async fn get_latitude(&self) -> AscomResult<Degrees> {
         Ok(self.state.read().await.observation_location.latitude)
@@ -51,8 +45,6 @@ impl StarAdventurer {
                 ),
             ));
         }
-        self.state.write().await.rotation_direction_key =
-            RotationDirectionKey::from_latitude(latitude);
         self.state.write().await.observation_location.latitude = latitude;
         Ok(())
     }

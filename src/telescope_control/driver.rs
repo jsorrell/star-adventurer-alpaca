@@ -117,6 +117,9 @@ impl DriverBuilder {
 }
 
 impl Driver {
+    pub const SLEW_SPEED_WITH_TRACKING: f64 = 0.2817; // deg/sec empirically determined
+    pub const SLEW_SPEED_AGAINST_TRACKING: f64 = 0.3072; // deg/sec empirically determined
+
     pub fn test_connection(&self) -> SynScanResult<()> {
         let mut mc = self.0.lock().unwrap();
         mc.test()
@@ -174,7 +177,13 @@ impl Driver {
 
     #[inline]
     pub fn get_max_speed() -> Degrees {
-        0.418032
+        Self::SLEW_SPEED_AGAINST_TRACKING.min(Self::SLEW_SPEED_WITH_TRACKING)
+        // 0.418032 // Max Reported Speed but it doesn't go this fast
+    }
+
+    #[inline]
+    pub fn get_goto_zeroing_speed() -> Degrees {
+        0.133727
     }
 
     /// Normally keep track of rate locally -- only used for initing
