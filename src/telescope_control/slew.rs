@@ -7,7 +7,7 @@ use crate::util::*;
 use crate::{astro_math, AxisRateRange};
 use std::future::Future;
 use std::time::Duration;
-use tokio::sync::{oneshot, RwLockWriteGuard};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::{join, sync, task, time};
 
@@ -51,15 +51,15 @@ impl StarAdventurer {
 
     async fn restore_state_after_slew(
         after_state: AfterSlewState,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
     ) {
         if after_state == AfterSlewState::Tracking {
             if let Err(_e) = driver
                 .start_rotation(MotionRate::new(
-                    state_lock.tracking_rate.into(),
+                    state.tracking_rate.into(),
                     TrackingDirection::WithTracking
-                        .using(state_lock.observation_location.get_rotation_direction_key())
+                        .using(state.observation_location.get_rotation_direction_key())
                         .into(),
                 ))
                 .await
@@ -68,11 +68,11 @@ impl StarAdventurer {
             }
         }
 
-        state_lock.motor_state = MotorState::from_after_state(
+        state.motor_state = MotorState::from_after_state(
             after_state,
-            state_lock.tracking_rate,
+            state.tracking_rate,
             TrackingDirection::WithTracking
-                .using(state_lock.observation_location.get_rotation_direction_key())
+                .using(state.observation_location.get_rotation_direction_key())
                 .into(),
         );
     }
@@ -164,7 +164,7 @@ impl StarAdventurer {
 
     /// Ensures not parked or slewing and cancels guiding
     /// Returns a restorable state
-    fn check_state_for_slew(state: &RwLockWriteGuard<State>) -> AscomResult<()> {
+    fn check_state_for_slew(state: &State) -> AscomResult<()> {
         if state.motor_state.is_parked() {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidWhileParked,
@@ -284,7 +284,7 @@ impl StarAdventurer {
     /// pos can be negative or positive or past 360 deg
     async fn slew_motor_to_pos(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         pos: Degrees,
         after_state: AfterSlewState,
@@ -295,7 +295,7 @@ impl StarAdventurer {
         let complete_slew_future =
             Self::complete_slew(state_arc.clone(), driver.clone(), cancel_rx, goto_complete);
 
-        state_lock.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Gotoing {
+        state.motor_state = MotorState::Moving(MovingState::Slewing(SlewingState::Gotoing {
             destination: pos,
             canceller,
             after_state,
@@ -306,25 +306,18 @@ impl StarAdventurer {
 
     async fn slew_motor_in_direction(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         distance: Hours,
         direction: impl RotationDirection,
         after_state: AfterSlewState,
     ) -> AscomResult<impl Future<Output = ()>> {
         let med: MotorEncodingDirection = direction
-            .using(state_lock.observation_location.get_rotation_direction_key())
+            .using(state.observation_location.get_rotation_direction_key())
             .into();
         let pos_offset = med.get_sign_f64() * hours_to_deg(distance);
         let cur_pos = driver.get_pos().await?;
-        Self::slew_motor_to_pos(
-            state_arc,
-            state_lock,
-            driver,
-            cur_pos + pos_offset,
-            after_state,
-        )
-        .await
+        Self::slew_motor_to_pos(state_arc, state, driver, cur_pos + pos_offset, after_state).await
     }
 
     // Positive if with tracking, negative if against
@@ -520,27 +513,27 @@ impl StarAdventurer {
     }
 
     fn slew_dec_to_pos(
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         target_dec: Degrees,
         meridian_flip: bool,
         dec_slew_block: bool,
     ) -> impl Future<Output = ()> {
         let (tx, rx) = sync::oneshot::channel();
 
-        if target_dec != state_lock.declination || meridian_flip {
+        if target_dec != state.declination || meridian_flip {
             let dec_change =
-                Self::calculate_dec_change(state_lock.declination, target_dec, meridian_flip);
+                Self::calculate_dec_change(state.declination, target_dec, meridian_flip);
             if dec_slew_block {
-                state_lock.declination_slew = DeclinationSlew::Waiting(dec_change, tx);
+                state.declination_slew = DeclinationSlew::Waiting(dec_change, tx);
             } else {
                 // Instant return
                 Self::alert_user_to_change_declination(dec_change);
-                state_lock.declination = target_dec;
+                state.declination = target_dec;
             }
         }
 
         if meridian_flip {
-            state_lock.pier_side = state_lock.pier_side.opposite();
+            state.pier_side = state.pier_side.opposite();
         }
 
         async move {
@@ -551,7 +544,7 @@ impl StarAdventurer {
     /// Same as slew to pos, but modulos and calculates shortest path
     pub(in crate::telescope_control) async fn slew_motor_to_angle(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         target_angle: Degrees,
         after_state: AfterSlewState,
@@ -562,20 +555,13 @@ impl StarAdventurer {
         let (distance, direction, _, est_slew_time) =
             Self::find_shortest_path_to_ha(cur_pos, target_pos, false);
 
-        Self::slew_motor_in_direction(
-            state_arc,
-            state_lock,
-            driver,
-            distance,
-            direction,
-            after_state,
-        )
-        .await
+        Self::slew_motor_in_direction(state_arc, state, driver, distance, direction, after_state)
+            .await
     }
 
     async fn slew_to_ha_and_dec(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         ha: Hours,
         dec: Degrees,
@@ -583,7 +569,7 @@ impl StarAdventurer {
         dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
         /* RA */
-        let current_ha = Self::inquire_ha(&*state_lock, driver.clone()).await?;
+        let current_ha = Self::inquire_ha(&*state, driver.clone()).await?;
 
         // Find shortest path
         let (distance, direction, meridian_flip, est_slew_time) =
@@ -591,7 +577,7 @@ impl StarAdventurer {
 
         let motor_slew_future = Self::slew_motor_in_direction(
             state_arc,
-            state_lock,
+            state,
             driver,
             distance,
             direction,
@@ -601,7 +587,7 @@ impl StarAdventurer {
 
         /* Dec */
 
-        let dec_slew_future = Self::slew_dec_to_pos(state_lock, dec, meridian_flip, dec_slew_block);
+        let dec_slew_future = Self::slew_dec_to_pos(state, dec, meridian_flip, dec_slew_block);
 
         /* Join */
 
@@ -616,22 +602,22 @@ impl StarAdventurer {
         ra: Hours,
         _dec: Degrees,
     ) -> AscomResult<PierSide> {
-        let state_lock = self.state.read().await;
-        let current_ra = Self::inquire_ra(&*state_lock, self.driver.clone()).await?;
+        let state = self.state.read().await;
+        let current_ra = Self::inquire_ra(&state, self.driver.clone()).await?;
 
         // Find shortest path
         let (_, _, meridian_flip, _) = Self::find_shortest_path_to_ra(current_ra, ra);
 
         Ok(if meridian_flip {
-            state_lock.pier_side.opposite()
+            state.pier_side.opposite()
         } else {
-            state_lock.pier_side
+            state.pier_side
         })
     }
 
     async fn slew_to_ra_and_dec(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         ra: Hours,
         dec: Degrees,
@@ -639,7 +625,7 @@ impl StarAdventurer {
         dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
         /* RA */
-        let current_ra = Self::inquire_ra(&*state_lock, driver.clone()).await?;
+        let current_ra = Self::inquire_ra(&*state, driver.clone()).await?;
 
         // Find shortest path
         let (distance, direction, meridian_flip, est_slew_time) =
@@ -647,7 +633,7 @@ impl StarAdventurer {
 
         let motor_slew_future = Self::slew_motor_in_direction(
             state_arc,
-            state_lock,
+            state,
             driver,
             distance,
             direction,
@@ -657,7 +643,7 @@ impl StarAdventurer {
 
         /* Dec */
 
-        let dec_slew_future = Self::slew_dec_to_pos(state_lock, dec, meridian_flip, dec_slew_block);
+        let dec_slew_future = Self::slew_dec_to_pos(state, dec, meridian_flip, dec_slew_block);
 
         /* Join */
 
@@ -668,21 +654,21 @@ impl StarAdventurer {
 
     async fn slew_to_target_with_lock(
         state_arc: StateArc,
-        state_lock: &mut RwLockWriteGuard<'_, State>,
+        state: &mut State,
         driver: Driver,
         dec_slew_block: bool,
     ) -> AscomResult<SlewTaskHandle> {
-        Self::check_state_for_slew(&state_lock)?;
+        Self::check_state_for_slew(&state)?;
 
         // Ensure target is set
-        let ra = state_lock.target.try_get_right_ascension()?;
-        let dec = state_lock.target.try_get_declination()?;
+        let ra = state.target.try_get_right_ascension()?;
+        let dec = state.target.try_get_declination()?;
 
-        let after_state = state_lock.motor_state.as_after_slew_state();
+        let after_state = state.motor_state.as_after_slew_state();
 
         let slew_task = Self::slew_to_ra_and_dec(
             state_arc.clone(),
-            state_lock,
+            state,
             driver.clone(),
             ra,
             dec,
