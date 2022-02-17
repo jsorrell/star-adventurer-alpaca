@@ -376,46 +376,55 @@ impl StarAdventurer {
         let dist_with_flip_with_tracking = modulo(target_ha - current_ha + 12., 24.);
 
         let options = [
-            (
-                // Positive slew, no meridian flip
-                dist_with_tracking,
-                TrackingDirection::WithTracking,
-                false,
-                chrono::Duration::seconds(
-                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_WITH_TRACKING).round()
-                        as i64,
-                ),
-            ),
-            (
-                // Negative slew, no meridian flip
-                24. - dist_with_tracking,
-                TrackingDirection::AgainstTracking,
-                false,
-                chrono::Duration::seconds(
-                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_AGAINST_TRACKING).round()
-                        as i64,
-                ),
-            ),
-            (
-                // Positive slew, meridian flip
-                dist_with_flip_with_tracking,
-                TrackingDirection::WithTracking,
-                true,
-                chrono::Duration::seconds(
-                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_WITH_TRACKING).round()
-                        as i64,
-                ),
-            ),
-            (
-                // Negative slew, meridian flip
-                24. - dist_with_flip_with_tracking,
-                TrackingDirection::AgainstTracking,
-                true,
-                chrono::Duration::seconds(
-                    (hours_to_deg(dist_with_tracking) / Driver::SLEW_SPEED_AGAINST_TRACKING).round()
-                        as i64,
-                ),
-            ),
+            {
+                let dist = dist_with_tracking;
+                (
+                    // Positive slew, no meridian flip
+                    dist,
+                    TrackingDirection::WithTracking,
+                    false,
+                    chrono::Duration::seconds(
+                        (hours_to_deg(dist) / Driver::SLEW_SPEED_WITH_TRACKING).round() as i64,
+                    ),
+                )
+            },
+            {
+                let dist = 24. - dist_with_tracking;
+
+                (
+                    // Negative slew, no meridian flip
+                    dist,
+                    TrackingDirection::AgainstTracking,
+                    false,
+                    chrono::Duration::seconds(
+                        (hours_to_deg(dist) / Driver::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
+                    ),
+                )
+            },
+            {
+                let dist = dist_with_flip_with_tracking;
+                (
+                    // Positive slew, meridian flip
+                    dist_with_flip_with_tracking,
+                    TrackingDirection::WithTracking,
+                    true,
+                    chrono::Duration::seconds(
+                        (hours_to_deg(dist) / Driver::SLEW_SPEED_WITH_TRACKING).round() as i64,
+                    ),
+                )
+            },
+            {
+                let dist = 24. - dist_with_flip_with_tracking;
+                (
+                    // Negative slew, meridian flip
+                    dist,
+                    TrackingDirection::AgainstTracking,
+                    true,
+                    chrono::Duration::seconds(
+                        (hours_to_deg(dist) / Driver::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
+                    ),
+                )
+            },
         ];
 
         options
