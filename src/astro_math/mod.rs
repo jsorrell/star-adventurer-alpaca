@@ -140,8 +140,12 @@ pub fn calculate_az_from_ha_dec(ha: Hours, dec: Degrees, lat: Degrees) -> Degree
 }
 
 pub fn calculate_ha_dec_from_alt_az(alt: Degrees, az: Degrees, lat: Degrees) -> (Hours, Degrees) {
+    if !(-90. ..=90.).contains(&alt) {
+        panic!("Alt must be in the range -90 to 90")
+    }
+
     let alt_rad = deg_to_rad(alt);
-    let az_rad = deg_to_rad(az);
+    let az_rad = deg_to_rad(modulo(az, 360.));
     let lat_rad = deg_to_rad(lat);
 
     let dec_rad = (lat_rad.sin() * alt_rad.sin() + lat_rad.cos() * alt_rad.cos() * az_rad.cos())
@@ -150,7 +154,7 @@ pub fn calculate_ha_dec_from_alt_az(alt: Degrees, az: Degrees, lat: Degrees) -> 
     let ha_rad = (-az_rad.sin() * alt_rad.cos() / dec_rad.cos()).asin() as Radians;
 
     let ha_hours = rad_to_hours(ha_rad);
-    let ha_hours = if az < 0. { 12. - ha_hours } else { ha_hours };
+    let ha_hours = if alt < 0. { 12. - ha_hours } else { ha_hours };
 
     (modulo(ha_hours, 24.), rad_to_deg(dec_rad))
 }
@@ -300,6 +304,27 @@ mod tests {
                 lat: ms_to_dec(37, 45, 3.),
                 alt: ms_to_dec(20, 19, 20.5),
                 az: ms_to_dec(152, 23, 39.3),
+            },
+            TestPos {
+                ha: 0.,
+                dec: 51.47,
+                lat: 51.47,
+                alt: 90.,
+                az: 90., // az is undefined and implementation dependent
+            },
+            TestPos {
+                ha: 12.00,
+                dec: -51.47,
+                lat: 51.47,
+                alt: -90.,
+                az: 270., // az is undefined and implementation dependent
+            },
+            TestPos {
+                ha: ms_to_dec(13, 35, 44.69),
+                dec: -ms_to_dec(21, 27, 41.3),
+                lat: ms_to_dec(51, 28, 40.12),
+                alt: -ms_to_dec(54, 41, 22.7),
+                az: ms_to_dec(40, 47, 16.3),
             },
         ];
 
