@@ -93,7 +93,7 @@ impl StarAdventurer {
             declination: 0.0, // Set only by sync or goto
             hour_angle_offset: 0.0, // Set only by sync or goto
             autoguide_speed: AutoGuideSpeed::Half, // Write only, so default to half b/c most standard
-            pier_side: PierSide::East,             // TODO use this?
+            pier_side: PierSide::East,             // TODO Should this always be East to start?
             date_offset: chrono::Duration::zero(), // Assume using computer time
             post_slew_settle_time: config.other_settings.slew_settle_time,
             target: Target::default(), // No target initially
@@ -243,7 +243,7 @@ impl StarAdventurer {
 
     /// True if the SideOfPier property can be set, meaning that the mount can be forced to flip.
     pub async fn can_set_side_of_pier(&self) -> AscomResult<bool> {
-        Ok(false) // FIXME revisit
+        Ok(false)
     }
 
     /// Sets the pointing state of the mount

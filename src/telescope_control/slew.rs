@@ -149,16 +149,6 @@ impl StarAdventurer {
         Ok(axis == Axis::Primary)
     }
 
-    /// Predicts the pointing state that a German equatorial mount will be in if it slews to the given coordinates
-    pub async fn predict_destination_side_of_pier(
-        &self,
-        _ra: Hours,
-        _dec: Degrees,
-    ) -> AscomResult<PierSide> {
-        // TODO pier side stuff
-        Ok(self.state.read().await.pier_side)
-    }
-
     /// True if this telescope is capable of programmed finding its home position (FindHome() method).
     pub async fn can_find_home(&self) -> AscomResult<bool> {
         Ok(false)
@@ -514,10 +504,9 @@ impl StarAdventurer {
     fn alert_user_to_change_declination(dec_change: Degrees) {
         // Handle declination stuff
         // FIXME Better notification
-        // FIXME Side of pier change?
         if dec_change != 0. {
             let dec_change_turns = dec_change / 2.957;
-            // TODO List this in clockwise or ccw (depending on pier side)
+            // TODO Remove the turns after blocking app is implemented
             println!(
                 "TURN DECLINATION KNOB {:.2} TURNS TO THE {}",
                 dec_change_turns.abs(),
@@ -551,7 +540,7 @@ impl StarAdventurer {
         }
 
         if meridian_flip {
-            //TODO implement meridian flip logic
+            state_lock.pier_side = state_lock.pier_side.opposite();
         }
 
         async move {
@@ -594,12 +583,7 @@ impl StarAdventurer {
         dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
         /* RA */
-        let current_motor_pos = driver.get_pos().await?;
-        let current_ha = Self::get_hour_angle(
-            current_motor_pos,
-            state_lock.hour_angle_offset,
-            state_lock.observation_location.get_rotation_direction_key(),
-        );
+        let current_ha = Self::inquire_ha(&*state_lock, driver.clone()).await?;
 
         // Find shortest path
         let (distance, direction, meridian_flip, est_slew_time) =
@@ -626,6 +610,25 @@ impl StarAdventurer {
         });
     }
 
+    /// Predicts the pointing state that a German equatorial mount will be in if it slews to the given coordinates
+    pub async fn predict_destination_side_of_pier(
+        &self,
+        ra: Hours,
+        _dec: Degrees,
+    ) -> AscomResult<PierSide> {
+        let state_lock = self.state.read().await;
+        let current_ra = Self::inquire_ra(&*state_lock, self.driver.clone()).await?;
+
+        // Find shortest path
+        let (_, _, meridian_flip, _) = Self::find_shortest_path_to_ra(current_ra, ra);
+
+        Ok(if meridian_flip {
+            state_lock.pier_side.opposite()
+        } else {
+            state_lock.pier_side
+        })
+    }
+
     async fn slew_to_ra_and_dec(
         state_arc: StateArc,
         state_lock: &mut RwLockWriteGuard<'_, State>,
@@ -636,18 +639,7 @@ impl StarAdventurer {
         dec_slew_block: bool,
     ) -> AscomResult<impl Future<Output = ()>> {
         /* RA */
-        let current_motor_pos = driver.get_pos().await?;
-        let current_ha = Self::get_hour_angle(
-            current_motor_pos,
-            state_lock.hour_angle_offset,
-            state_lock.observation_location.get_rotation_direction_key(),
-        );
-
-        let lst = astro_math::calculate_local_sidereal_time(
-            Self::calculate_utc_date(state_lock.date_offset),
-            state_lock.observation_location.longitude,
-        );
-        let current_ra = Self::calculate_ra(lst, current_ha);
+        let current_ra = Self::inquire_ra(&*state_lock, driver.clone()).await?;
 
         // Find shortest path
         let (distance, direction, meridian_flip, est_slew_time) =

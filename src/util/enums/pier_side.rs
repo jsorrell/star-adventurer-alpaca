@@ -11,3 +11,13 @@ pub enum PierSide {
     #[field(value = "1")]
     West = 1,
 }
+
+impl PierSide {
+    pub fn opposite(self) -> Self {
+        match self {
+            PierSide::Unknown => self,
+            PierSide::East => PierSide::West,
+            PierSide::West => PierSide::East,
+        }
+    }
+}
