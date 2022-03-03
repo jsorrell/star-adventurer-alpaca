@@ -1,7 +1,7 @@
 use crate::request::*;
+use crate::response::AlpacaResponse;
 use crate::util::*;
-use crate::{response, StarAdventurer};
-use crate::{try_connected, AlpacaState};
+use crate::AlpacaState;
 use proc_macros::alpaca_handler;
 use rocket::State;
 
@@ -10,16 +10,12 @@ use rocket::State;
 pub async fn put_action(data: ActionData, state: &AlpacaState) -> AscomResult<String> {
     match &*data.action {
         "pending_declination_slew" => {
-            try_connected!(state, sa, {
-                let change = sa.get_pending_dec_change().await;
-                Ok(change.to_string())
-            })
+            let change = state.sa.get_pending_dec_change().await;
+            Ok(change.to_string())
         }
         "complete_declination_slew" => {
-            try_connected!(state, sa, {
-                sa.complete_dec_slew().await;
-                Ok("".to_string())
-            })
+            state.sa.complete_dec_slew().await;
+            Ok("".to_string())
         }
         _ => Err(AscomError::from_msg(
             AscomErrorType::ActionNotImplemented,
@@ -56,33 +52,18 @@ pub async fn put_command_string(_data: CommandData, _state: &AlpacaState) -> Asc
 /* Connected */
 #[alpaca_handler]
 pub async fn get_connected(state: &AlpacaState) -> AscomResult<bool> {
-    Ok(state.sa.read().await.is_some())
+    Ok(state.sa.is_connected().await)
 }
 
 #[alpaca_handler]
 pub async fn put_connected(data: SetConnectedData, state: &AlpacaState) -> AscomResult<()> {
-    let mut sa = state.sa.write().await;
-    match (&*sa, data.connected) {
-        (Some(_), false) => {
-            *sa = {
-                log::warn!("Disconnecting");
-                None
-            }
-        }
-        (None, true) => {
-            let v = StarAdventurer::new(&state.config).await;
-            if let Err(e) = v {
-                log::error!("Couldn't connect to StarAdventurer: {}", &e);
-                return Err(e);
-            } else {
-                log::info!("Connected")
-            }
-            *sa = Some(v.unwrap())
-        }
-        _ => (),
-    };
-
-    Ok(())
+    if data.connected {
+        log::warn!("Connecting");
+        state.sa.connect().await
+    } else {
+        log::warn!("Disconnecting");
+        state.sa.disconnect().await
+    }
 }
 
 #[alpaca_handler]

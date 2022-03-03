@@ -20,4 +20,12 @@ impl PierSide {
             PierSide::West => PierSide::East,
         }
     }
+
+    pub fn flip(&mut self) {
+        match self {
+            PierSide::Unknown => {}
+            PierSide::East => *self = PierSide::West,
+            PierSide::West => *self = PierSide::East,
+        }
+    }
 }

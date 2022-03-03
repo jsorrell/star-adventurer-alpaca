@@ -1,8 +1,5 @@
 use crate::util::*;
 use synscan::Direction;
-use tokio::sync::oneshot;
-
-pub(crate) type TaskCanceller = oneshot::Sender<()>;
 
 #[derive(Debug, Clone)]
 pub enum MotorState {

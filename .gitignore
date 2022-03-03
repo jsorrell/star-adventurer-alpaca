@@ -1,4 +1,5 @@
 /target
 /.idea
 *.iml
-config.toml
+/config.toml
+/Rocket.toml

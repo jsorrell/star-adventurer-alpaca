@@ -76,7 +76,7 @@ pub fn calculate_greenwich_sidereal_time(time: chrono::DateTime<chrono::Utc>) ->
 
     let du = jd_utc - 2451545.0;
     let theta = rad_to_hours(modulo(
-        TAU * (0.7790572732640 + 1.00273781191135448 * du),
+        TAU * (0.779_057_273_264f64 + 1.002_737_811_911_354_5f64 * du),
         TAU,
     ));
 
@@ -154,7 +154,12 @@ pub fn calculate_ha_dec_from_alt_az(alt: Degrees, az: Degrees, lat: Degrees) -> 
     let ha_rad = (-az_rad.sin() * alt_rad.cos() / dec_rad.cos()).asin() as Radians;
 
     let ha_hours = rad_to_hours(ha_rad);
-    let ha_hours = if alt < 0. { 12. - ha_hours } else { ha_hours };
+    let polar_axis_alt = az.cos() * lat;
+    let ha_hours = if alt < polar_axis_alt {
+        12. - ha_hours
+    } else {
+        ha_hours
+    };
 
     (modulo(ha_hours, 24.), rad_to_deg(dec_rad))
 }

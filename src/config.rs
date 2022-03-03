@@ -37,7 +37,7 @@ pub struct ObservingLocation {
 
 impl ObservingLocation {
     pub fn in_north(&self) -> bool {
-        return 0. < self.latitude;
+        0. < self.latitude
     }
 
     pub fn get_rotation_direction_key(&self) -> RotationDirectionKey {
@@ -67,5 +67,5 @@ pub struct TelescopeDetails {
 #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct OtherSettings {
     pub slew_settle_time: u32,
-    pub dec_slew_block: bool,
+    pub instant_dec_slew: bool,
 }

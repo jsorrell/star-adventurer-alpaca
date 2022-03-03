@@ -145,9 +145,9 @@ pub fn alpaca_handler(args: TokenStream, input: TokenStream) -> TokenStream {
 
     return quote! {
         #rocket_attribute
-        #vis async fn #fn_ident(#wrapper_data_ident: #wrapper_data_type, #wrapper_state_ident: &State<#state_type>) -> rocket::serde::json::Json<response::AlpacaResponse<#result_type>> {
+        #vis async fn #fn_ident(#wrapper_data_ident: #wrapper_data_type, #wrapper_state_ident: &State<#state_type>) -> rocket::serde::json::Json<AlpacaResponse<#result_type>> {
             let result = #inner_fn_call.await;
-            rocket::serde::json::Json(response::AlpacaResponse::new(result, #wrapper_data_ident.client_transaction_id, &_state.sti))
+            rocket::serde::json::Json(AlpacaResponse::new(result, #wrapper_data_ident.client_transaction_id, &_state.sti))
         }
 
         #(#attrs)* #vis #new_sig {#(#stmts)*}

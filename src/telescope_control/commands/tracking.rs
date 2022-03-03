@@ -55,41 +55,37 @@ impl StarAdventurer {
 
     /// The current tracking rate of the telescope's sidereal drive.
     pub async fn get_tracking_rate(&self) -> AscomResult<TrackingRate> {
-        Ok(self.state.read().await.tracking_rate)
+        Ok(*self.settings.tracking_rate.read().await)
     }
 
     /// Sets the tracking rate of the telescope's sidereal drive
     pub async fn set_tracking_rate(&self, tracking_rate: TrackingRate) -> AscomResult<()> {
-        let mut state = self.state.write().await;
         // No change needed
-        if state.tracking_rate == tracking_rate {
+        let mut lock = self.settings.tracking_rate.write().await;
+        if *lock == tracking_rate {
             return Ok(());
         }
 
-        state.tracking_rate = tracking_rate;
+        *lock = tracking_rate;
 
-        if state.motor_state.is_tracking() {
-            let current_motor_rate = state.motor_state.determine_motion_rate();
-            let target_motor_state = state.motor_state.clone_without_guiding();
+        let tracking_motion_rate = tracking_rate.into_motion_rate(
+            self.settings
+                .observation_location
+                .read()
+                .await
+                .get_rotation_direction_key(),
+        );
 
-            // Change current tracking rate
-            // Changing speed while moving is fine b/c it's at low speed
-            self.driver
-                .change_motor_rate(
-                    current_motor_rate,
-                    target_motor_state.determine_motion_rate(),
-                )
-                .await?;
-
-            state.motor_state = target_motor_state;
-        };
+        self.connection
+            .update_tracking_rate(tracking_motion_rate)
+            .await?;
 
         Ok(())
     }
 
     /// Returns the state of the telescope's sidereal tracking drive.
     pub async fn is_tracking(&self) -> AscomResult<bool> {
-        Ok(self.state.read().await.motor_state.is_tracking())
+        Ok(self.connection.is_tracking().await?)
     }
 
     /// Sets the state of the telescope's sidereal tracking drive.
@@ -97,51 +93,22 @@ impl StarAdventurer {
     /// TODO Does it change what they'll do when the gotos are over?
     /// TODO Going with can only set it while not gotoing
     pub async fn set_is_tracking(&self, should_track: bool) -> AscomResult<()> {
-        let mut state = self.state.write().await;
-        // Nothing to do
-        if state.motor_state.is_tracking() == should_track {
-            return Ok(());
-        }
+        if should_track {
+            let tracking_rate = self.settings.tracking_rate.read().await;
+            let key = self
+                .settings
+                .observation_location
+                .read()
+                .await
+                .get_rotation_direction_key();
 
-        if state.motor_state.is_parked() {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Can't start tracking while parked".to_string(),
-            ));
-        }
-
-        if state.is_slewing() {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Can't start tracking while slewing".to_string(),
-            ));
-        }
-
-        if state.motor_state.is_manually_moving_axis() {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidOperation,
-                "Can't start tracking while moving axis".to_string(),
-            ));
-        }
-
-        let current_rate = state.motor_state.determine_motion_rate();
-
-        let target_state = if should_track {
-            MotorState::Moving(MovingState::Constant {
-                state: ConstantMotionState::Tracking,
-                guiding_state: GuidingState::Idle,
-                motion_rate: state
-                    .tracking_rate
-                    .into_motion_rate(state.observation_location.get_rotation_direction_key()),
-            })
+            println!("Starting tracking");
+            self.connection
+                .start_tracking(tracking_rate.into_motion_rate(key))
+                .await?
         } else {
-            MotorState::Stationary(StationaryState::Unparked(GuidingState::Idle))
-        };
-
-        self.driver
-            .change_motor_rate(current_rate, target_state.determine_motion_rate())
-            .await?;
-        state.motor_state = target_state;
+            self.connection.stop_tracking().await?;
+        }
         Ok(())
     }
 }

@@ -1,181 +1,23 @@
-mod driver;
-pub mod guide;
-pub mod observing_pos;
-pub mod parking;
-pub mod pointing_pos;
-pub mod slew;
-pub mod sync;
-pub mod target;
+pub use star_adventurer::StarAdventurer;
+
+use crate::util::*;
+
+mod connection;
+mod commands {
+    pub mod guide;
+    pub mod observing_pos;
+    pub mod parking;
+    pub mod pointing_pos;
+    pub mod slew;
+    pub mod sync;
+    pub mod target;
+    pub mod tracking;
+}
+mod star_adventurer;
 #[cfg(test)]
 pub(in crate::telescope_control) mod test_util;
-pub mod tracking;
-
-use crate::config;
-use crate::config::{Config, TelescopeDetails};
-use crate::rotation_direction::RotationDirection;
-use crate::telescope_control::driver::{Driver, DriverBuilder, Status};
-use crate::tracking_direction::TrackingDirection;
-use crate::util::*;
-use std::sync::Arc;
-use std::time::Duration;
-use synscan::AutoGuideSpeed;
-use target::Target;
-use tokio::sync::{oneshot, RwLock};
-use tokio::task;
-
-type StateArc = Arc<RwLock<State>>;
-
-#[derive(Debug)]
-pub enum DeclinationSlew {
-    Waiting(Degrees, tokio::sync::oneshot::Sender<()>),
-    Idle,
-}
-
-#[derive(Debug)]
-pub(in crate::telescope_control) struct State {
-    observation_location: config::ObservingLocation,
-    date_offset: chrono::Duration,
-
-    park_pos: Degrees,
-    // Pos
-    hour_angle_offset: Hours, // Hour angle at pos=0
-    declination: Degrees,
-
-    pier_side: PierSide,
-
-    tracking_rate: TrackingRate,
-    post_slew_settle_time: u32,
-    target: Target,
-
-    declination_slew: DeclinationSlew,
-    motor_state: MotorState,
-    autoguide_speed: AutoGuideSpeed,
-}
-
-impl State {
-    pub fn is_slewing(&self) -> bool {
-        matches!(self.declination_slew, DeclinationSlew::Waiting(..))
-            || self.motor_state.is_slewing()
-    }
-}
-
-pub struct StarAdventurer {
-    driver: Driver,
-    telescope_details: TelescopeDetails,
-    state: StateArc,
-    dec_slew_block: bool,
-}
 
 impl StarAdventurer {
-    pub async fn new(config: &Config) -> AscomResult<Self> {
-        let mut db = DriverBuilder::new().with_timeout(Duration::from_millis(
-            config.com_settings.timeout_millis as u64,
-        ));
-
-        if config.com_settings.path.is_some() {
-            db = db.with_path(config.com_settings.path.clone().unwrap());
-        }
-
-        let driver = db.create();
-
-        if let Err(e) = driver {
-            // TODO Invalid value?
-            return AscomResult::Err(AscomError::from_msg(AscomErrorType::InvalidValue, e));
-        }
-
-        let driver = driver.unwrap();
-
-        driver.set_autoguide_speed(AutoGuideSpeed::Half).await?;
-
-        let state = State {
-            observation_location: config.observation_location,
-            park_pos: 0.0, // TODO: Put an angular park pos in config (that only works after alignment)
-            declination: 0.0, // Set only by sync or goto
-            hour_angle_offset: 0.0, // Set only by sync or goto
-            autoguide_speed: AutoGuideSpeed::Half, // Write only, so default to half b/c most standard
-            pier_side: PierSide::East,             // TODO Should this always be East to start?
-            date_offset: chrono::Duration::zero(), // Assume using computer time
-            post_slew_settle_time: config.other_settings.slew_settle_time,
-            target: Target::default(), // No target initially
-            tracking_rate: TrackingRate::Sidereal,
-            motor_state: MotorState::Stationary(StationaryState::Parked), // temporary value
-            declination_slew: DeclinationSlew::Idle,
-        };
-
-        let sa = StarAdventurer {
-            driver,
-            state: Arc::new(RwLock::new(state)),
-            telescope_details: config.telescope_details,
-            dec_slew_block: config.other_settings.dec_slew_block,
-        };
-
-        sa.determine_state_from_driver().await?;
-
-        Ok(sa)
-    }
-
-    pub async fn determine_state_from_driver(&self) -> AscomResult<()> {
-        let mut state = self.state.write().await;
-        let status = self.driver.get_status().await?;
-
-        match status {
-            Status::Slewing(target) => {
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                let goto_complete = self.driver.clone().track_goto();
-                state.motor_state =
-                    MotorState::Moving(MovingState::Slewing(SlewingState::Gotoing {
-                        destination: target,
-                        canceller: cancel_tx,
-                        after_state: AfterSlewState::Stationary,
-                    }));
-                task::spawn(Self::complete_slew(
-                    self.state.clone(),
-                    self.driver.clone(),
-                    cancel_rx,
-                    goto_complete,
-                ));
-            }
-            Status::Moving(direction) => {
-                let tracking_rate = self.driver.determine_tracking_rate().await?;
-                if direction
-                    == TrackingDirection::WithTracking
-                        .using(state.observation_location.get_rotation_direction_key())
-                        .into()
-                    && tracking_rate.is_a()
-                {
-                    state.tracking_rate = tracking_rate.get_a().unwrap();
-                    state.motor_state = MotorState::Moving(MovingState::Constant {
-                        state: ConstantMotionState::Tracking,
-                        guiding_state: GuidingState::Idle,
-                        motion_rate: MotionRate::new(state.tracking_rate.into(), direction),
-                    });
-                } else {
-                    let rate = tracking_rate
-                        .get_b()
-                        .unwrap_or_else(|| tracking_rate.get_a().unwrap().into());
-                    state.motor_state = MotorState::Moving(MovingState::Constant {
-                        state: ConstantMotionState::MoveAxis {
-                            after_state: AfterSlewState::Stationary,
-                        },
-                        guiding_state: GuidingState::Idle,
-                        motion_rate: MotionRate::new(rate, direction),
-                    });
-                }
-            }
-            Status::Stationary => {
-                state.tracking_rate = self
-                    .driver
-                    .determine_tracking_rate()
-                    .await?
-                    .a_or(state.tracking_rate);
-                state.motor_state =
-                    MotorState::Stationary(StationaryState::Unparked(GuidingState::Idle));
-            }
-        };
-
-        Ok(())
-    }
-
     /// Returns the alignment mode of the mount (Alt/Az, Polar, German Polar)
     pub async fn get_alignment_mode(&self) -> AscomResult<AlignmentMode> {
         Ok(AlignmentMode::GermanPolar)
@@ -188,7 +30,7 @@ impl StarAdventurer {
 
     /// The telescope's effective aperture diameter (meters)
     pub async fn get_aperture(&self) -> AscomResult<f64> {
-        self.telescope_details.aperture.ok_or_else(|| {
+        self.settings.telescope_details.aperture.ok_or_else(|| {
             AscomError::from_msg(
                 AscomErrorType::ValueNotSet,
                 "Aperture not defined".to_string(),
@@ -198,17 +40,20 @@ impl StarAdventurer {
 
     /// The area of the telescope's aperture, taking into account any obstructions (square meters)
     pub async fn get_aperture_area(&self) -> AscomResult<f64> {
-        self.telescope_details.aperture_area.ok_or_else(|| {
-            AscomError::from_msg(
-                AscomErrorType::ValueNotSet,
-                "Aperture area not defined".to_string(),
-            )
-        })
+        self.settings
+            .telescope_details
+            .aperture_area
+            .ok_or_else(|| {
+                AscomError::from_msg(
+                    AscomErrorType::ValueNotSet,
+                    "Aperture area not defined".to_string(),
+                )
+            })
     }
 
     /// The telescope's focal length in meters
     pub async fn get_focal_length(&self) -> AscomResult<f64> {
-        self.telescope_details.focal_length.ok_or_else(|| {
+        self.settings.telescope_details.focal_length.ok_or_else(|| {
             AscomError::from_msg(
                 AscomErrorType::ValueNotSet,
                 "Focal length not defined".to_string(),
@@ -229,7 +74,7 @@ impl StarAdventurer {
 
     /// Tell the telescope or driver whether to apply atmospheric refraction to coordinates.
     pub async fn set_does_refraction(&self, _does_refraction: bool) -> AscomResult<()> {
-        // TODO implement these?
+        // TODO implement this?
         Err(AscomError::from_msg(
             AscomErrorType::PropertyOrMethodNotImplemented,
             "Refraction calculations not available".to_string(),
@@ -238,7 +83,7 @@ impl StarAdventurer {
 
     /// Indicates the pointing state of the mount
     pub async fn get_side_of_pier(&self) -> AscomResult<PierSide> {
-        Ok(self.state.read().await.pier_side)
+        Ok(*self.settings.pier_side.read().await)
     }
 
     /// True if the SideOfPier property can be set, meaning that the mount can be forced to flip.

@@ -1,9 +1,9 @@
-use crate::util::*;
-use crate::{astro_math, StarAdventurer};
 use chrono::{DateTime, Utc};
 use tokio::join;
 
-use crate::util::result::{AscomError, AscomErrorType, AscomResult};
+use crate::astro_math;
+use crate::telescope_control::star_adventurer::StarAdventurer;
+use crate::util::*;
 
 impl StarAdventurer {
     /*** Date ***/
@@ -17,13 +17,13 @@ impl StarAdventurer {
     /// Please note the compulsory trailing Z indicating the 'Zulu', UTC time zone.
     pub async fn get_utc_date(&self) -> AscomResult<DateTime<Utc>> {
         Ok(Self::calculate_utc_date(
-            self.state.read().await.date_offset,
+            *self.settings.date_offset.read().await,
         ))
     }
 
     /// The UTC date/time of the telescope's internal clock in ISO 8601 format including fractional seconds. The general format (in Microsoft custom date format style) is yyyy-MM-ddTHH:mm:ss.fffffffZ E.g. 2016-03-04T17:45:31.1234567Z or 2016-11-14T07:03:08.1234567Z Please note the compulsary trailing Z indicating the 'Zulu', UTC time zone.
     pub async fn set_utc_date(&self, time: DateTime<Utc>) -> AscomResult<()> {
-        self.state.write().await.date_offset = time - Utc::now();
+        *self.settings.date_offset.write().await = time - Utc::now();
         Ok(())
     }
 
@@ -31,12 +31,12 @@ impl StarAdventurer {
 
     /// The geodetic(map) latitude (degrees, positive North, WGS84) of the site at which the telescope is located.
     pub async fn get_latitude(&self) -> AscomResult<Degrees> {
-        Ok(self.state.read().await.observation_location.latitude)
+        Ok(self.settings.observation_location.read().await.latitude)
     }
 
     /// Sets the observing site's latitude (degrees).
     pub async fn set_latitude(&self, latitude: Degrees) -> AscomResult<()> {
-        if latitude < -90. || 90. < latitude {
+        if !(-90. ..=90.).contains(&latitude) {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidValue,
                 format!(
@@ -45,7 +45,7 @@ impl StarAdventurer {
                 ),
             ));
         }
-        self.state.write().await.observation_location.latitude = latitude;
+        self.settings.observation_location.write().await.latitude = latitude;
         Ok(())
     }
 
@@ -53,12 +53,12 @@ impl StarAdventurer {
 
     /// The longitude (degrees, positive East, WGS84) of the site at which the telescope is located.
     pub async fn get_longitude(&self) -> AscomResult<Degrees> {
-        Ok(self.state.read().await.observation_location.longitude)
+        Ok(self.settings.observation_location.read().await.longitude)
     }
 
     /// Sets the observing site's longitude (degrees, positive East, WGS84).
     pub async fn set_longitude(&self, longitude: Degrees) -> AscomResult<()> {
-        if longitude < -180. || 180. < longitude {
+        if !(-180. ..=180.).contains(&longitude) {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidValue,
                 format!(
@@ -67,7 +67,7 @@ impl StarAdventurer {
                 ),
             ));
         }
-        self.state.write().await.observation_location.longitude = longitude;
+        self.settings.observation_location.write().await.longitude = longitude;
         Ok(())
     }
 
@@ -75,12 +75,12 @@ impl StarAdventurer {
 
     /// The elevation above mean sea level (meters) of the site at which the telescope is located
     pub async fn get_elevation(&self) -> AscomResult<f64> {
-        Ok(self.state.read().await.observation_location.elevation)
+        Ok(self.settings.observation_location.read().await.elevation)
     }
 
     /// Sets the elevation above mean sea level (metres) of the site at which the telescope is located.
     pub async fn set_elevation(&self, elevation: f64) -> AscomResult<()> {
-        if elevation < -300. || 10000. < elevation {
+        if !(-300. ..=10000.).contains(&elevation) {
             return Err(AscomError::from_msg(
                 AscomErrorType::InvalidValue,
                 format!(
@@ -89,7 +89,7 @@ impl StarAdventurer {
                 ),
             ));
         }
-        self.state.write().await.observation_location.elevation = elevation;
+        self.settings.observation_location.write().await.elevation = elevation;
         Ok(())
     }
 
@@ -104,9 +104,11 @@ impl StarAdventurer {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util;
-    use chrono::{TimeZone, Utc};
     use std::time::Duration;
+
+    use chrono::{TimeZone, Utc};
+
+    use super::super::test_util;
 
     #[tokio::test]
     async fn test_date() {

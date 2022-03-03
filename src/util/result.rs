@@ -18,15 +18,22 @@ pub enum AscomErrorType {
     ActionNotImplemented = 0x40C,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AscomError {
     pub error_number: i32,
     pub error_message: String,
 }
 
 impl AscomError {
-    pub fn from_msg(e_type: AscomErrorType, message: String) -> AscomError {
-        AscomError {
+    pub fn not_connected() -> Self {
+        Self::from_msg(
+            AscomErrorType::NotConnected,
+            "Telescope Not Connected".to_string(),
+        )
+    }
+
+    pub fn from_msg(e_type: AscomErrorType, message: String) -> Self {
+        Self {
             error_number: e_type as i32,
             error_message: message,
         }

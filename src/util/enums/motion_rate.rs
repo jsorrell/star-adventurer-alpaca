@@ -1,5 +1,5 @@
 use crate::Degrees;
-use std::ops::Add;
+use std::ops::{Add, Sub};
 use synscan::Direction;
 
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
@@ -26,6 +26,15 @@ impl MotionRate {
         self.clockwise_rate.abs()
     }
 
+    /// If negative, will flip direction
+    pub fn set_rate(&mut self, rate: Degrees) {
+        if self.clockwise_rate < 0. {
+            self.clockwise_rate = -rate
+        } else {
+            self.clockwise_rate = rate
+        }
+    }
+
     pub fn direction(&self) -> Direction {
         if self.clockwise_rate < 0. {
             Direction::CounterClockwise
@@ -41,6 +50,16 @@ impl Add<MotionRate> for MotionRate {
     fn add(self, rhs: MotionRate) -> Self::Output {
         Self {
             clockwise_rate: self.clockwise_rate + rhs.clockwise_rate,
+        }
+    }
+}
+
+impl Sub<MotionRate> for MotionRate {
+    type Output = Self;
+
+    fn sub(self, rhs: MotionRate) -> Self::Output {
+        Self {
+            clockwise_rate: self.clockwise_rate - rhs.clockwise_rate,
         }
     }
 }
