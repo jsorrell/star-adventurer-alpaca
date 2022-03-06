@@ -17,12 +17,9 @@ impl ShortTask for AbortSlewTask {
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
     {
-        println!("In Task");
         let mut lock = locker.write().await;
-        println!("Locker fine");
         let cs = HasCS::get_mut(&mut *lock)?;
 
-        println!("Checking State");
         let restorable_state = match &cs.ascom_state {
             AscomState::Parked => {
                 return Ok(Err(AscomError::from_msg(
@@ -43,7 +40,6 @@ impl ShortTask for AbortSlewTask {
                 *rs
             }
         };
-        println!("State check over");
 
         let change_rate_task = if let RestorableState::Tracking(mr) = restorable_state {
             cs.ascom_state = AscomState::Tracking(GuideState::Idle);

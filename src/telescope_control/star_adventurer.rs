@@ -1,13 +1,17 @@
 use std::time::Duration;
 
 use synscan::AutoGuideSpeed;
+use tokio::join;
 use tokio::sync::RwLock;
 
-use super::commands::target::Target;
 use crate::config::TelescopeDetails;
+use crate::rotation_direction::{RotationDirection, RotationDirectionKey};
 use crate::telescope_control::connection::*;
+use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
-use crate::{config, Config};
+use crate::{astro_math, config, Config};
+
+use super::commands::target::Target;
 
 pub enum DeclinationSlew {
     Waiting {
@@ -32,12 +36,11 @@ pub struct StarAdventurer {
 
 impl StarAdventurer {
     pub async fn new(config: &Config) -> Self {
-        let mut cb = ConnectionBuilder::new().with_timeout(Duration::from_millis(
-            config.com_settings.timeout_millis as u64,
-        ));
+        let mut cb = ConnectionBuilder::new()
+            .with_timeout(Duration::from_millis(config.com.timeout_millis as u64));
 
-        if config.com_settings.path.is_some() {
-            cb = cb.with_path(config.com_settings.path.clone().unwrap());
+        if config.com.path.is_some() {
+            cb = cb.with_path(config.com.path.clone().unwrap());
         }
 
         let settings = Settings::new(config);
@@ -63,6 +66,33 @@ impl StarAdventurer {
         self.connection.disconnect().await;
         Ok(())
     }
+
+    // With the telescope pointing at the meridian, this is zero
+    pub fn calc_mech_ha(
+        motor_pos: Degrees,
+        mech_ha_offset: Hours,
+        key: RotationDirectionKey,
+    ) -> Hours {
+        let tracking_direction: MotorEncodingDirection =
+            TrackingDirection::WithTracking.using(key).into();
+        let unmoduloed_angle = mech_ha_offset
+            + tracking_direction.get_sign_f64() * astro_math::deg_to_hours(motor_pos);
+        astro_math::modulo(unmoduloed_angle, 24.)
+    }
+
+    pub(in crate::telescope_control) async fn get_mech_ha(&self) -> AscomResult<Hours> {
+        let pos = self.connection.get_pos().await?;
+        let (mech_ha_offset, obs_loc) = join!(
+            async { *self.settings.mech_ha_offset.read().await },
+            async { *self.settings.observation_location.read().await },
+        );
+
+        Ok(Self::calc_mech_ha(
+            pos,
+            mech_ha_offset,
+            obs_loc.get_rotation_direction_key(),
+        ))
+    }
 }
 
 pub(in crate::telescope_control) struct Settings {
@@ -71,7 +101,8 @@ pub(in crate::telescope_control) struct Settings {
     pub date_offset: RwLock<chrono::Duration>,
     pub instant_dec_slew: RwLock<bool>,
 
-    pub park_pos: RwLock<Degrees>,
+    pub park_ha: RwLock<Hours>, // Mechanical HA, 0..24
+    pub mount_limits: RwLock<MountLimits>,
     pub target: RwLock<Target>,
 
     pub post_slew_settle_time: RwLock<u32>,
@@ -80,7 +111,7 @@ pub(in crate::telescope_control) struct Settings {
     pub tracking_rate: RwLock<TrackingRate>, // Read from motor on connection
 
     // Pos
-    pub hour_angle_offset: RwLock<Hours>, // Hour angle at pos=0
+    pub mech_ha_offset: RwLock<Hours>, // Mechanical HA, 0..24
     pub declination: RwLock<Degrees>,
     pub pier_side: RwLock<PierSide>,
 
@@ -91,16 +122,24 @@ impl Settings {
     pub fn new(config: &Config) -> Self {
         Settings {
             observation_location: RwLock::new(config.observation_location),
-            park_pos: RwLock::new(0.0), // TODO: Put an angular park pos in config (that only works after alignment)
-            declination: RwLock::new(0.0), // Set only by sync or goto
-            hour_angle_offset: RwLock::new(0.0), // Set only by sync or goto
-            autoguide_speed: RwLock::new(AutoGuideSpeed::Half), // Write only, so default to half b/c most standard
-            pier_side: RwLock::new(PierSide::East), // TODO Should this always be East to start?
+            park_ha: RwLock::new(astro_math::modulo(config.other.park_hour_angle, 24.)), // Mechanical hour angle
+            mount_limits: RwLock::new(MountLimits::new(
+                config.other.mount_limit_east,
+                config.other.mount_limit_west,
+            )),
+            declination: RwLock::new(config.initialization.declination), // Set only by sync or goto
+            // hour_angle_offset: RwLock::new(StarAdventurer::calc_ha_from_mech_ha(
+            //     config.initialization.hour_angle,
+            //     config.initialization.pier_side,
+            // )),
+            mech_ha_offset: RwLock::new(config.initialization.hour_angle),
+            autoguide_speed: RwLock::new(config.other.auto_guide_speed), // Write only
+            pier_side: RwLock::new(config.initialization.pier_side),
             date_offset: RwLock::new(chrono::Duration::zero()), // Assume using computer time
-            post_slew_settle_time: RwLock::new(config.other_settings.slew_settle_time),
+            post_slew_settle_time: RwLock::new(config.other.slew_settle_time),
             target: RwLock::new(Target::default()), // No target initially
             tracking_rate: RwLock::new(TrackingRate::Sidereal),
-            instant_dec_slew: RwLock::new(config.other_settings.instant_dec_slew),
+            instant_dec_slew: RwLock::new(config.other.instant_dec_slew),
             telescope_details: config.telescope_details,
         }
     }

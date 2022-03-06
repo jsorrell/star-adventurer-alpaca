@@ -1,36 +1,48 @@
 use rocket::futures::join;
 
 use crate::astro_math;
-use crate::rotation_direction::{RotationDirection, RotationDirectionKey};
+use crate::rotation_direction::RotationDirectionKey;
 use crate::telescope_control::star_adventurer::StarAdventurer;
-use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 
 impl StarAdventurer {
-    pub fn calc_ha(
-        driver_pos: Degrees,
-        hour_angle_offset: Hours,
-        key: RotationDirectionKey,
-    ) -> Hours {
-        let tracking_direction: MotorEncodingDirection =
-            TrackingDirection::WithTracking.using(key).into();
-        let unmoduloed_angle = hour_angle_offset
-            + tracking_direction.get_sign_f64() * astro_math::deg_to_hours(driver_pos);
-        astro_math::modulo(unmoduloed_angle, 24.)
+    pub fn calc_mech_ha_from_ha(ha: Hours, pier_side: PierSide) -> Hours {
+        astro_math::modulo(
+            match pier_side {
+                PierSide::East => ha - 6.,
+                PierSide::West => ha + 6.,
+                PierSide::Unknown => unreachable!(),
+            },
+            24.,
+        )
+    }
+
+    pub fn calc_ha_from_mech_ha(mech_ha: Hours, pier_side: PierSide) -> Hours {
+        astro_math::modulo(
+            match pier_side {
+                PierSide::East => mech_ha + 6.,
+                PierSide::West => mech_ha - 6.,
+                PierSide::Unknown => unreachable!(),
+            },
+            24.,
+        )
     }
 
     pub(in crate::telescope_control) async fn get_ha(&self) -> AscomResult<Hours> {
-        let pos = self.connection.get_pos().await?;
-        let (hour_angle_offset, obs_loc) = join!(
-            async { *self.settings.hour_angle_offset.read().await },
-            async { *self.settings.observation_location.read().await },
-        );
+        let mech_ha = self.get_mech_ha().await?;
+        let pier_side = self.get_side_of_pier().await?;
+        Ok(Self::calc_ha_from_mech_ha(mech_ha, pier_side))
+    }
 
-        Ok(Self::calc_ha(
-            pos,
-            hour_angle_offset,
-            obs_loc.get_rotation_direction_key(),
-        ))
+    // With the telescope pointing at the meridian, this is zero
+    pub fn calc_ha(
+        motor_pos: Degrees,
+        mech_ha_offset: Hours,
+        key: RotationDirectionKey,
+        pier_side: PierSide,
+    ) -> Hours {
+        let mech_ha = Self::calc_mech_ha(motor_pos, mech_ha_offset, key);
+        Self::calc_ha_from_mech_ha(mech_ha, pier_side)
     }
 
     pub fn calc_ra(ha: Hours, longitude: Degrees, date_offset: chrono::Duration) -> Hours {
@@ -45,17 +57,12 @@ impl StarAdventurer {
     /// The right ascension (hours) of the mount's current equatorial coordinates,
     /// in the coordinate system given by the EquatorialSystem property
     pub async fn get_ra(&self) -> AscomResult<Hours> {
-        let pos = self.connection.get_pos().await?;
-        let (observation_location, hour_angle_offset, date_offset) = join!(
+        let ha = self.get_ha().await?;
+        let (observation_location, date_offset) = join!(
             async { *self.settings.observation_location.read().await },
-            async { *self.settings.hour_angle_offset.read().await },
             async { *self.settings.date_offset.read().await },
         );
-        let ha = Self::calc_ha(
-            pos,
-            hour_angle_offset,
-            observation_location.get_rotation_direction_key(),
-        );
+
         Ok(Self::calc_ra(
             ha,
             observation_location.longitude,

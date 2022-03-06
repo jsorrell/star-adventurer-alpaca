@@ -17,6 +17,20 @@ pub async fn put_action(data: ActionData, state: &AlpacaState) -> AscomResult<St
             state.sa.complete_dec_slew().await;
             Ok("".to_string())
         }
+        "set_pier_side_after_manual_move" => {
+            let pier_side = match &*data.parameters {
+                "east" => PierSide::East,
+                "west" => PierSide::West,
+                _ => {
+                    return Err(AscomError::from_msg(
+                        AscomErrorType::InvalidValue,
+                        format!("Unknown pier side: \"{}\"", data.parameters),
+                    ))
+                }
+            };
+            state.sa.set_pier_side_after_manual_move(pier_side).await;
+            Ok("".to_string())
+        }
         _ => Err(AscomError::from_msg(
             AscomErrorType::ActionNotImplemented,
             "Action not implemented".to_string(),

@@ -273,6 +273,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let start_tracking_task = StartTrackingTask::new(rate);
 
@@ -300,6 +301,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let stop_tracking_task = StopTrackingTask::new();
 
@@ -321,6 +323,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let update_tracking_rate_task = UpdateTrackingRateTask::new(rate);
 
@@ -348,6 +351,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let move_motor_task = MoveMotorTask::new(rate);
 
@@ -382,6 +386,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let pulse_guide_task = PulseGuideTask::new(guide_rate, duration);
 
@@ -465,6 +470,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let unpark_task = UnparkTask::new();
 
@@ -486,6 +492,7 @@ impl Connection {
             }
             AbortableTaskType::None => {}
         }
+        *task_lock = AbortableTaskType::None;
 
         let abort_slew_task = AbortSlewTask::new();
         self.run_short_task(abort_slew_task).await

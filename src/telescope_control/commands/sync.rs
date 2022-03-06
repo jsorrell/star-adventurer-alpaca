@@ -6,14 +6,18 @@ use crate::util::*;
 impl StarAdventurer {
     /// Raw helper function that performs no checks
     async fn sync_to_ra_dec(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
-        let hour_angle = astro_math::calculate_hour_angle(
+        let ha = astro_math::calculate_hour_angle(
             Self::calculate_utc_date(*self.settings.date_offset.read().await),
             self.settings.observation_location.read().await.longitude,
             ra,
         );
 
-        *self.settings.hour_angle_offset.write().await =
-            Self::calc_hour_angle_offset(hour_angle, self.connection.get_pos().await?);
+        let pier_side = *self.settings.pier_side.read().await;
+
+        let mech_ha = Self::calc_mech_ha_from_ha(ha, pier_side);
+
+        *self.settings.mech_ha_offset.write().await =
+            Self::calc_mech_ha_offset(mech_ha, self.connection.get_pos().await?);
         *self.settings.declination.write().await = dec;
         Ok(())
     }
@@ -24,11 +28,11 @@ impl StarAdventurer {
     }
 
     #[inline]
-    pub(in crate::telescope_control) fn calc_hour_angle_offset(
-        hour_angle: Hours,
+    pub(in crate::telescope_control) fn calc_mech_ha_offset(
+        mech_hour_angle: Hours,
         motor_pos: Degrees,
     ) -> Hours {
-        hour_angle - astro_math::deg_to_hours(motor_pos)
+        mech_hour_angle - astro_math::deg_to_hours(motor_pos)
     }
 
     /// Matches the scope's equatorial coordinates to the given equatorial coordinates.
@@ -64,6 +68,10 @@ impl StarAdventurer {
         Ok(true)
     }
 
+    pub async fn set_pier_side_after_manual_move(&self, pier_side: PierSide) {
+        *self.settings.pier_side.write().await = pier_side;
+    }
+
     /// Matches the scope's local horizontal coordinates to the given local horizontal coordinates.
     pub async fn sync_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
         check_alt(alt)?;
@@ -81,8 +89,13 @@ impl StarAdventurer {
             az,
             self.settings.observation_location.read().await.latitude,
         );
-        *self.settings.hour_angle_offset.write().await =
-            Self::calc_hour_angle_offset(ha, self.connection.get_pos().await?);
+
+        let pier_side = *self.settings.pier_side.read().await;
+
+        let mech_ha = Self::calc_mech_ha_from_ha(ha, pier_side);
+
+        *self.settings.mech_ha_offset.write().await =
+            Self::calc_mech_ha_offset(mech_ha, self.connection.get_pos().await?);
         *self.settings.declination.write().await = dec;
         Ok(())
     }

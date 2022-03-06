@@ -13,6 +13,8 @@ mod commands {
     pub mod target;
     pub mod tracking;
 }
+pub mod mount_limits;
+mod slew_def;
 mod star_adventurer;
 #[cfg(test)]
 pub(in crate::telescope_control) mod test_util;

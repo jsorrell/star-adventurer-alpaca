@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::telescope_control::mount_limits::*;
 pub use abort_result::*;
 pub use enums::*;
 pub use infinite_future::*;

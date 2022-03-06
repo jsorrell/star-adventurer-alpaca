@@ -60,8 +60,6 @@ impl LongTask for SlewToTask {
             AscomState::Slewing(SlewingState::SlewTo) => unreachable!(),
         };
 
-        println!("Slew To checks done");
-
         if !matches!(cs.motor.get_state(), MotorState::Stationary) {
             let stop_task = cs
                 .motor
@@ -74,7 +72,6 @@ impl LongTask for SlewToTask {
             cs = HasCS::get_mut(&mut *lock)?;
         }
 
-        println!("Starting motor goto");
         let motor_goto_task = cs.motor.goto(locker.clone(), self.target_pos).await?;
         cs.ascom_state = AscomState::Slewing(SlewingState::SlewTo);
 

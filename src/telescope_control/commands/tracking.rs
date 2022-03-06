@@ -102,7 +102,6 @@ impl StarAdventurer {
                 .await
                 .get_rotation_direction_key();
 
-            println!("Starting tracking");
             self.connection
                 .start_tracking(tracking_rate.into_motion_rate(key))
                 .await?

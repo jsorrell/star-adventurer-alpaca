@@ -13,6 +13,10 @@ pub enum PierSide {
 }
 
 impl PierSide {
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown)
+    }
+
     pub fn opposite(self) -> Self {
         match self {
             PierSide::Unknown => self,

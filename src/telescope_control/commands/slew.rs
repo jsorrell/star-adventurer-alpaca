@@ -5,9 +5,9 @@ use std::time::Duration;
 use tokio::{join, task, time};
 
 use crate::astro_math;
-use crate::astro_math::{deg_to_hours, hours_to_deg, modulo};
-use crate::rotation_direction::RotationDirection;
+use crate::rotation_direction::{RotationDirection, RotationDirectionKey};
 use crate::telescope_control::connection::consts;
+use crate::telescope_control::slew_def::Slew;
 use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 
@@ -169,160 +169,160 @@ impl StarAdventurer {
         Ok(())
     }
 
-    // Positive if with tracking, negative if against
-    fn calculate_pos_change(ra_change: Hours, slew_speed: Degrees) -> (Hours, chrono::Duration) {
-        const INSTANT_DISTANCE: Hours = 0.1;
+    // // Positive if with tracking, negative if against
+    // fn calculate_pos_change(ra_change: Hours, slew_speed: Degrees) -> (Hours, chrono::Duration) {
+    //     const INSTANT_DISTANCE: Hours = 0.1;
+    //
+    //     if ra_change.abs() < INSTANT_DISTANCE {
+    //         return (ra_change, chrono::Duration::zero());
+    //     }
+    //
+    //     let slew_speed_hours_per_hour = deg_to_hours(slew_speed) * 3600.;
+    //
+    //     // ALG FOR SLEW TIME ESTIMATION
+    //     // -----------------------------------
+    //     // pos_change = ra_change + dt
+    //     //
+    //     // dt = abs(pos_change) / slew_speed
+    //     //
+    //     // assume sign(ra_change) == sign(pos_change) (it will be unless INSTANT_DISTANCE is way too low)
+    //     // dt = (abs(ra_change) + dt) / slew_speed
+    //     // dt = abs(ra_change) / (slew_speed - 1)
+    //
+    //     let dt_hours = ra_change.abs() / (slew_speed_hours_per_hour - 1.) as Hours;
+    //     let pos_change = ra_change + dt_hours;
+    //     let dt_seconds = dt_hours * 3600.;
+    //
+    //     (
+    //         pos_change,
+    //         chrono::Duration::seconds(dt_seconds.round() as i64),
+    //     )
+    // }
 
-        if ra_change.abs() < INSTANT_DISTANCE {
-            return (ra_change, chrono::Duration::zero());
-        }
+    // fn find_shortest_path_to_ha(
+    //     current_ha: Hours,
+    //     target_ha: Hours,
+    //     allow_meridian_flip: bool,
+    // ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
+    //     let dist_with_tracking = modulo(target_ha - current_ha, 24.);
+    //     let dist_with_flip_with_tracking = modulo(target_ha - current_ha + 12., 24.);
+    //
+    //     let options = [
+    //         {
+    //             let dist = dist_with_tracking;
+    //             (
+    //                 // Positive slew, no meridian flip
+    //                 dist,
+    //                 TrackingDirection::WithTracking,
+    //                 false,
+    //                 chrono::Duration::seconds(
+    //                     (hours_to_deg(dist) / consts::SLEW_SPEED_WITH_TRACKING).round() as i64,
+    //                 ),
+    //             )
+    //         },
+    //         {
+    //             let dist = 24. - dist_with_tracking;
+    //
+    //             (
+    //                 // Negative slew, no meridian flip
+    //                 dist,
+    //                 TrackingDirection::AgainstTracking,
+    //                 false,
+    //                 chrono::Duration::seconds(
+    //                     (hours_to_deg(dist) / consts::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
+    //                 ),
+    //             )
+    //         },
+    //         {
+    //             let dist = dist_with_flip_with_tracking;
+    //             (
+    //                 // Positive slew, meridian flip
+    //                 dist_with_flip_with_tracking,
+    //                 TrackingDirection::WithTracking,
+    //                 true,
+    //                 chrono::Duration::seconds(
+    //                     (hours_to_deg(dist) / consts::SLEW_SPEED_WITH_TRACKING).round() as i64,
+    //                 ),
+    //             )
+    //         },
+    //         {
+    //             let dist = 24. - dist_with_flip_with_tracking;
+    //             (
+    //                 // Negative slew, meridian flip
+    //                 dist,
+    //                 TrackingDirection::AgainstTracking,
+    //                 true,
+    //                 chrono::Duration::seconds(
+    //                     (hours_to_deg(dist) / consts::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
+    //                 ),
+    //             )
+    //         },
+    //     ];
+    //
+    //     options
+    //         .into_iter()
+    //         .filter(|a| allow_meridian_flip || !a.2)
+    //         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+    //         .unwrap()
+    // }
 
-        let slew_speed_hours_per_hour = deg_to_hours(slew_speed) * 3600.;
-
-        // ALG FOR SLEW TIME ESTIMATION
-        // -----------------------------------
-        // pos_change = ra_change + dt
-        //
-        // dt = abs(pos_change) / slew_speed
-        //
-        // assume sign(ra_change) == sign(pos_change) (it will be unless INSTANT_DISTANCE is way too low)
-        // dt = (abs(ra_change) + dt) / slew_speed
-        // dt = abs(ra_change) / (slew_speed - 1)
-
-        let dt_hours = ra_change.abs() / (slew_speed_hours_per_hour - 1.) as Hours;
-        let pos_change = ra_change + dt_hours;
-        let dt_seconds = dt_hours * 3600.;
-
-        (
-            pos_change,
-            chrono::Duration::seconds(dt_seconds.round() as i64),
-        )
-    }
-
-    fn find_shortest_path_to_ha(
-        current_ha: Hours,
-        target_ha: Hours,
-        allow_meridian_flip: bool,
-    ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
-        let dist_with_tracking = modulo(target_ha - current_ha, 24.);
-        let dist_with_flip_with_tracking = modulo(target_ha - current_ha + 12., 24.);
-
-        let options = [
-            {
-                let dist = dist_with_tracking;
-                (
-                    // Positive slew, no meridian flip
-                    dist,
-                    TrackingDirection::WithTracking,
-                    false,
-                    chrono::Duration::seconds(
-                        (hours_to_deg(dist) / consts::SLEW_SPEED_WITH_TRACKING).round() as i64,
-                    ),
-                )
-            },
-            {
-                let dist = 24. - dist_with_tracking;
-
-                (
-                    // Negative slew, no meridian flip
-                    dist,
-                    TrackingDirection::AgainstTracking,
-                    false,
-                    chrono::Duration::seconds(
-                        (hours_to_deg(dist) / consts::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
-                    ),
-                )
-            },
-            {
-                let dist = dist_with_flip_with_tracking;
-                (
-                    // Positive slew, meridian flip
-                    dist_with_flip_with_tracking,
-                    TrackingDirection::WithTracking,
-                    true,
-                    chrono::Duration::seconds(
-                        (hours_to_deg(dist) / consts::SLEW_SPEED_WITH_TRACKING).round() as i64,
-                    ),
-                )
-            },
-            {
-                let dist = 24. - dist_with_flip_with_tracking;
-                (
-                    // Negative slew, meridian flip
-                    dist,
-                    TrackingDirection::AgainstTracking,
-                    true,
-                    chrono::Duration::seconds(
-                        (hours_to_deg(dist) / consts::SLEW_SPEED_AGAINST_TRACKING).round() as i64,
-                    ),
-                )
-            },
-        ];
-
-        options
-            .into_iter()
-            .filter(|a| allow_meridian_flip || !a.2)
-            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            .unwrap()
-    }
-
-    fn find_shortest_path_to_ra(
-        current_ra: Hours,
-        target_ra: Hours,
-    ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
-        let dist_with_tracking = modulo(current_ra - target_ra, 24.);
-        let dist_with_flip_with_tracking = modulo(current_ra - target_ra + 12., 24.);
-
-        let options = [
-            {
-                // Positive slew, no meridian flip
-                let (change, duration) = Self::calculate_pos_change(
-                    dist_with_tracking,
-                    consts::SLEW_SPEED_WITH_TRACKING,
-                );
-                (change, TrackingDirection::WithTracking, false, duration)
-            },
-            {
-                // Negative slew, no meridian flip
-                let (change, duration) = Self::calculate_pos_change(
-                    dist_with_tracking - 24.,
-                    consts::SLEW_SPEED_AGAINST_TRACKING,
-                );
-                (
-                    change.abs(),
-                    TrackingDirection::AgainstTracking,
-                    false,
-                    duration,
-                )
-            },
-            {
-                // Positive slew, meridian flip
-                let (change, duration) = Self::calculate_pos_change(
-                    dist_with_flip_with_tracking,
-                    consts::SLEW_SPEED_WITH_TRACKING,
-                );
-                (change, TrackingDirection::WithTracking, true, duration)
-            },
-            {
-                // Negative slew, meridian flip
-                let (change, duration) = Self::calculate_pos_change(
-                    dist_with_flip_with_tracking - 24.,
-                    consts::SLEW_SPEED_AGAINST_TRACKING,
-                );
-                (
-                    change.abs(),
-                    TrackingDirection::AgainstTracking,
-                    true,
-                    duration,
-                )
-            },
-        ];
-
-        options
-            .into_iter()
-            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            .unwrap()
-    }
+    // fn find_shortest_path_to_ra(
+    //     current_ra: Hours,
+    //     target_ra: Hours,
+    // ) -> (Hours, TrackingDirection, bool, chrono::Duration) {
+    //     let dist_with_tracking = modulo(current_ra - target_ra, 24.);
+    //     let dist_with_flip_with_tracking = modulo(current_ra - target_ra + 12., 24.);
+    //
+    //     let options = [
+    //         {
+    //             // Positive slew, no meridian flip
+    //             let (change, duration) = Self::calculate_pos_change(
+    //                 dist_with_tracking,
+    //                 consts::SLEW_SPEED_WITH_TRACKING,
+    //             );
+    //             (change, TrackingDirection::WithTracking, false, duration)
+    //         },
+    //         {
+    //             // Negative slew, no meridian flip
+    //             let (change, duration) = Self::calculate_pos_change(
+    //                 dist_with_tracking - 24.,
+    //                 consts::SLEW_SPEED_AGAINST_TRACKING,
+    //             );
+    //             (
+    //                 change.abs(),
+    //                 TrackingDirection::AgainstTracking,
+    //                 false,
+    //                 duration,
+    //             )
+    //         },
+    //         {
+    //             // Positive slew, meridian flip
+    //             let (change, duration) = Self::calculate_pos_change(
+    //                 dist_with_flip_with_tracking,
+    //                 consts::SLEW_SPEED_WITH_TRACKING,
+    //             );
+    //             (change, TrackingDirection::WithTracking, true, duration)
+    //         },
+    //         {
+    //             // Negative slew, meridian flip
+    //             let (change, duration) = Self::calculate_pos_change(
+    //                 dist_with_flip_with_tracking - 24.,
+    //                 consts::SLEW_SPEED_AGAINST_TRACKING,
+    //             );
+    //             (
+    //                 change.abs(),
+    //                 TrackingDirection::AgainstTracking,
+    //                 true,
+    //                 duration,
+    //             )
+    //         },
+    //     ];
+    //
+    //     options
+    //         .into_iter()
+    //         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+    //         .unwrap()
+    // }
 
     fn calculate_dec_change(
         current_dec: Degrees,
@@ -397,15 +397,24 @@ impl StarAdventurer {
         WaitableTask::new_completed(AbortResult::Completed(()))
     }
 
-    async fn slew_to_motor_pos_and_dec(
+    async fn slew(
         &self,
-        pos: Degrees,
+        slew: Slew,
         dec: Degrees,
-        meridian_flip: bool,
+        current_pos: Degrees,
+        key: RotationDirectionKey,
     ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
         /* RA */
+        log::warn!(
+            "Starting slew estimated to take {}s",
+            slew.estimate_slew_time().as_secs()
+        );
 
-        let motor_slew_task = self.connection.slew_to(pos).await?;
+        let motor_direction = MotorEncodingDirection::from(slew.direction().using(key));
+        let pos_change = astro_math::hours_to_deg(slew.distance()) * motor_direction.get_sign_f64();
+        let dest_motor_pos = current_pos + pos_change;
+
+        let motor_slew_task = self.connection.slew_to(dest_motor_pos).await?;
         let (ra_slew_task, finisher) = WaitableTask::new();
         let settle_time = *self.settings.post_slew_settle_time.read().await;
         task::spawn(async move {
@@ -418,7 +427,7 @@ impl StarAdventurer {
 
         /* Dec */
 
-        let dec_slew_task = self.slew_dec(dec, meridian_flip).await;
+        let dec_slew_task = self.slew_dec(dec, slew.does_meridian_flip()).await;
 
         /* Join, discarding abort result because this isn't used by ASCOM */
 
@@ -428,67 +437,51 @@ impl StarAdventurer {
         })
     }
 
-    async fn slew_to_ha_and_dec(
+    async fn slew_to_ha(
         &self,
         ha: Hours,
         dec: Degrees,
     ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
         /* RA */
         let current_pos = self.connection.get_pos().await?;
-        let (observation_location, hour_angle_offset) = join!(
+        let (observation_location, mech_ha_offset, pier_side, mount_limits) = join!(
             async { *self.settings.observation_location.read().await },
-            async { *self.settings.hour_angle_offset.read().await },
+            async { *self.settings.mech_ha_offset.read().await },
+            async { *self.settings.pier_side.read().await },
+            async { *self.settings.mount_limits.read().await },
         );
 
         let key = observation_location.get_rotation_direction_key();
-        let current_ha = Self::calc_ha(current_pos, hour_angle_offset, key);
+        let current_mech_ha = Self::calc_mech_ha(current_pos, mech_ha_offset, key);
 
-        // Find shortest path
-        let (distance, direction, meridian_flip, est_slew_time) =
-            Self::find_shortest_path_to_ha(current_ha, ha, true);
-        log::warn!(
-            "Starting slew estimated to take {}s",
-            est_slew_time.num_seconds()
-        );
+        let slew = Slew::to_ha(current_mech_ha, ha, pier_side, mount_limits);
 
-        let med: MotorEncodingDirection = direction.using(key).into();
-        let pos_offset = med.get_sign_f64() * hours_to_deg(distance);
-
-        self.slew_to_motor_pos_and_dec(current_pos + pos_offset, dec, meridian_flip)
-            .await
+        self.slew(slew, dec, current_pos, key).await
     }
 
-    async fn slew_to_ra_and_dec(
+    async fn slew_to_ra(
         &self,
         ra: Hours,
         dec: Degrees,
     ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
         /* RA */
         let current_pos = self.connection.get_pos().await?;
-        let (observation_location, hour_angle_offset, date_offset) = join!(
+        let (observation_location, mech_ha_offset, date_offset, pier_side, mount_limits) = join!(
             async { *self.settings.observation_location.read().await },
-            async { *self.settings.hour_angle_offset.read().await },
+            async { *self.settings.mech_ha_offset.read().await },
             async { *self.settings.date_offset.read().await },
+            async { *self.settings.pier_side.read().await },
+            async { *self.settings.mount_limits.read().await },
         );
 
         let key = observation_location.get_rotation_direction_key();
-        let current_ha = Self::calc_ha(current_pos, hour_angle_offset, key);
-        /* RA */
+        let current_mech_ha = Self::calc_mech_ha(current_pos, mech_ha_offset, key);
+        let current_ha = Self::calc_ha_from_mech_ha(current_mech_ha, pier_side);
         let current_ra = Self::calc_ra(current_ha, observation_location.longitude, date_offset);
 
-        // Find shortest path
-        let (distance, direction, meridian_flip, est_slew_time) =
-            Self::find_shortest_path_to_ra(current_ra, ra);
-        log::warn!(
-            "Starting slew estimated to take {}s",
-            est_slew_time.num_seconds()
-        );
+        let slew = Slew::change_ra(current_mech_ha, ra - current_ra, mount_limits);
 
-        let med: MotorEncodingDirection = direction.using(key).into();
-        let pos_offset = med.get_sign_f64() * hours_to_deg(distance);
-
-        self.slew_to_motor_pos_and_dec(current_pos + pos_offset, dec, meridian_flip)
-            .await
+        self.slew(slew, dec, current_pos, key).await
     }
 
     /// Predicts the pointing state that a German equatorial mount will be in if it slews to the given coordinates
@@ -497,15 +490,26 @@ impl StarAdventurer {
         ra: Hours,
         _dec: Degrees,
     ) -> AscomResult<PierSide> {
-        let current_ra = self.get_ra().await?;
+        let current_pos = self.connection.get_pos().await?;
+        let (observation_location, mech_ha_offset, date_offset, pier_side, mount_limits) = join!(
+            async { *self.settings.observation_location.read().await },
+            async { *self.settings.mech_ha_offset.read().await },
+            async { *self.settings.date_offset.read().await },
+            async { *self.settings.pier_side.read().await },
+            async { *self.settings.mount_limits.read().await },
+        );
 
-        // Find shortest path
-        let (_, _, meridian_flip, _) = Self::find_shortest_path_to_ra(current_ra, ra);
+        let key = observation_location.get_rotation_direction_key();
+        let current_mech_ha = Self::calc_mech_ha(current_pos, mech_ha_offset, key);
+        let current_ha = Self::calc_ha_from_mech_ha(current_mech_ha, pier_side);
+        let current_ra = Self::calc_ra(current_ha, observation_location.longitude, date_offset);
 
-        Ok(if meridian_flip {
-            self.settings.pier_side.read().await.opposite()
+        let slew = Slew::change_ra(current_mech_ha, ra - current_ra, mount_limits);
+
+        Ok(if slew.does_meridian_flip() {
+            pier_side.opposite()
         } else {
-            *self.settings.pier_side.read().await
+            pier_side
         })
     }
 
@@ -519,7 +523,7 @@ impl StarAdventurer {
         let ra = target.try_get_right_ascension()?;
         let dec = target.try_get_declination()?;
 
-        self.slew_to_ra_and_dec(ra, dec).await
+        self.slew_to_ra(ra, dec).await
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
@@ -548,7 +552,7 @@ impl StarAdventurer {
             declination: Some(dec),
         };
 
-        self.slew_to_ra_and_dec(ra, dec).await
+        self.slew_to_ra(ra, dec).await
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
@@ -584,7 +588,7 @@ impl StarAdventurer {
             self.settings.observation_location.read().await.latitude,
         );
 
-        self.slew_to_ha_and_dec(ha, dec).await
+        self.slew_to_ha(ha, dec).await
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
