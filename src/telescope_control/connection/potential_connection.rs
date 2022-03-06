@@ -3,16 +3,16 @@ use crate::telescope_control::connection::motor::Motor;
 
 use super::*;
 
-pub enum Con {
+pub enum PotentialConnection {
     Connected(ConnectedState),
     Disconnected,
 }
 
-impl Con {
+impl PotentialConnection {
     pub fn is_connected(&self) -> bool {
         match self {
-            Con::Connected(_) => true,
-            Con::Disconnected => false,
+            PotentialConnection::Connected(_) => true,
+            PotentialConnection::Disconnected => false,
         }
     }
 
@@ -38,17 +38,17 @@ impl Con {
 }
 
 #[async_trait]
-impl RWLockable<Con> for Arc<RwLock<Con>> {
-    async fn read(&self) -> RwLockReadGuard<'_, Con> {
+impl RWLockable<PotentialConnection> for Arc<RwLock<PotentialConnection>> {
+    async fn read(&self) -> RwLockReadGuard<'_, PotentialConnection> {
         RwLock::read(self).await
     }
 
-    async fn write(&self) -> RwLockWriteGuard<'_, Con> {
+    async fn write(&self) -> RwLockWriteGuard<'_, PotentialConnection> {
         RwLock::write(self).await
     }
 }
 
-impl HasMotor for Con {
+impl HasMotor for PotentialConnection {
     fn get(&self) -> MotorResult<&Motor> {
         match self.get_con() {
             Ok(c) => Ok(&c.motor),

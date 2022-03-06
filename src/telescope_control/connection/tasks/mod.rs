@@ -6,10 +6,10 @@ pub use pulse_guide::PulseGuideTask;
 pub use set_tracking::{StartTrackingTask, StopTrackingTask, UpdateTrackingRateTask};
 pub use slew_to::SlewToTask;
 
-use crate::telescope_control::connection::con::Con;
-use crate::telescope_control::connection::con::ConnectedState;
 pub use crate::telescope_control::connection::motor::locked::HasMotor;
 pub use crate::telescope_control::connection::motor::MotorResult;
+use crate::telescope_control::connection::potential_connection::ConnectedState;
+use crate::telescope_control::connection::potential_connection::PotentialConnection;
 use crate::util::*;
 
 mod abort_slew;
@@ -33,7 +33,7 @@ pub trait HasCS {
     fn get_mut(&mut self) -> MotorResult<&mut ConnectedState>;
 }
 
-impl HasCS for Con {
+impl HasCS for PotentialConnection {
     fn get(&self) -> MotorResult<&ConnectedState> {
         match self.get_con() {
             Ok(c) => Ok(c),

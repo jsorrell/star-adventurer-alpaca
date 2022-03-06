@@ -7,36 +7,36 @@ use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::{select, task};
 
 use ascom_state::*;
-use con::*;
 pub use motor::consts;
+use potential_connection::*;
 
 use crate::telescope_control::connection::motor::{MotorBuilder, MotorError, MotorResult};
 use crate::telescope_control::connection::tasks::*;
 use crate::util::*;
 
 mod ascom_state;
-mod con;
 mod motor;
+mod potential_connection;
 mod tasks;
 
 pub type ConnectionBuilder = MotorBuilder;
 
 #[derive(Clone)]
 pub struct Connection {
-    c: Arc<RwLock<Con>>,
+    c: Arc<RwLock<PotentialConnection>>,
     task_lock: Arc<Mutex<AbortableTaskType>>,
     cb: ConnectionBuilder,
 }
 
 pub struct CSReadLock<'a> {
-    con_lock: RwLockReadGuard<'a, Con>,
+    con_lock: RwLockReadGuard<'a, PotentialConnection>,
 }
 
 impl Deref for CSReadLock<'_> {
     type Target = ConnectedState;
 
     fn deref(&self) -> &Self::Target {
-        if let Con::Connected(cs) = &*self.con_lock {
+        if let PotentialConnection::Connected(cs) = &*self.con_lock {
             cs
         } else {
             unreachable!()
@@ -45,14 +45,14 @@ impl Deref for CSReadLock<'_> {
 }
 
 pub struct CSWriteLock<'a> {
-    _con_lock: RwLockWriteGuard<'a, Con>,
+    _con_lock: RwLockWriteGuard<'a, PotentialConnection>,
 }
 
 impl Deref for CSWriteLock<'_> {
     type Target = ConnectedState;
 
     fn deref(&self) -> &Self::Target {
-        if let Con::Connected(cs) = &*self._con_lock {
+        if let PotentialConnection::Connected(cs) = &*self._con_lock {
             cs
         } else {
             unreachable!()
@@ -62,7 +62,7 @@ impl Deref for CSWriteLock<'_> {
 
 impl DerefMut for CSWriteLock<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        if let Con::Connected(cs) = &mut *self._con_lock {
+        if let PotentialConnection::Connected(cs) = &mut *self._con_lock {
             cs
         } else {
             unreachable!()
@@ -73,7 +73,7 @@ impl DerefMut for CSWriteLock<'_> {
 impl Connection {
     pub fn new(cb: ConnectionBuilder) -> Self {
         Connection {
-            c: Arc::new(RwLock::new(Con::Disconnected)),
+            c: Arc::new(RwLock::new(PotentialConnection::Disconnected)),
             task_lock: Arc::new(Mutex::new(AbortableTaskType::None)),
             cb,
         }
@@ -81,7 +81,7 @@ impl Connection {
 
     pub async fn connect(&self, autoguide_speed: AutoGuideSpeed) -> AscomResult<()> {
         let mut con = self.c.write().await;
-        if matches!(*con, Con::Connected(_)) {
+        if matches!(*con, PotentialConnection::Connected(_)) {
             return Ok(());
         }
 
@@ -117,29 +117,29 @@ impl Connection {
             motor,
         };
 
-        *con = Con::Connected(cs);
+        *con = PotentialConnection::Connected(cs);
 
         Ok(())
     }
 
     pub async fn disconnect(&self) {
         let mut con = self.c.write().await;
-        *con = Con::Disconnected;
+        *con = PotentialConnection::Disconnected;
     }
 
     pub async fn read_con(&self) -> AscomResult<CSReadLock<'_>> {
         let lock = self.c.read().await;
         match &*lock {
-            Con::Connected(_) => Ok(CSReadLock { con_lock: lock }),
-            Con::Disconnected => Err(AscomError::not_connected()),
+            PotentialConnection::Connected(_) => Ok(CSReadLock { con_lock: lock }),
+            PotentialConnection::Disconnected => Err(AscomError::not_connected()),
         }
     }
 
     pub async fn write_con(&self) -> AscomResult<CSWriteLock<'_>> {
         let lock = self.c.write().await;
         match &*lock {
-            Con::Connected(_) => Ok(CSWriteLock { _con_lock: lock }),
-            Con::Disconnected => Err(AscomError::not_connected()),
+            PotentialConnection::Connected(_) => Ok(CSWriteLock { _con_lock: lock }),
+            PotentialConnection::Disconnected => Err(AscomError::not_connected()),
         }
     }
 
@@ -500,7 +500,7 @@ impl Connection {
 }
 
 impl Deref for Connection {
-    type Target = Arc<RwLock<Con>>;
+    type Target = Arc<RwLock<PotentialConnection>>;
 
     fn deref(&self) -> &Self::Target {
         &self.c
