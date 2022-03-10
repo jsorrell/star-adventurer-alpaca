@@ -92,12 +92,14 @@ impl LongTask for PulseGuideTask {
         rate_change_task.await
     }
 
-    async fn abort<L, T>(&mut self, _locker: &L) -> MotorResult<()>
+    async fn abort<L, T>(&mut self, locker: &L) -> MotorResult<()>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
     {
-        // Nothing to do
+        let mut lock = locker.write().await;
+        let cs = HasCS::get_mut(&mut *lock)?;
+        *cs.ascom_state.guide_ref_mut() = GuideState::Idle; // marker to show we've remembered to abort
         Ok(())
     }
 
