@@ -21,7 +21,7 @@ impl Device for AlpacaState {
     }
 
     fn unique_id(&self) -> &str {
-        todo!()
+        "f2d8e3a1-6c52-4d34-b475-e88056182f2b"
     }
 
     /* Action */

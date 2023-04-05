@@ -29,5 +29,8 @@ async fn main() -> anyhow::Result<()> {
     };
     server.devices.register(state);
 
+    server
+        .listen_addr
+        .set_ip(std::net::Ipv4Addr::LOCALHOST.into());
     server.start_server().await
 }
