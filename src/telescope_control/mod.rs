@@ -1,9 +1,6 @@
 pub use star_adventurer::StarAdventurer;
 
-use crate::util::*;
-use ascom_alpaca::api::{
-    AlignmentModeResponse, EquatorialSystemResponse, TelescopeSetSideOfPierRequestSideOfPier,
-};
+use ascom_alpaca::api::{AlignmentMode, EquatorialSystem, SideOfPier};
 use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 mod connection;
@@ -25,13 +22,13 @@ pub(in crate::telescope_control) mod test_util;
 
 impl StarAdventurer {
     /// Returns the alignment mode of the mount (Alt/Az, Polar, German Polar)
-    pub async fn get_alignment_mode(&self) -> ASCOMResult<AlignmentModeResponse> {
-        Ok(AlignmentModeResponse::GermanPolar)
+    pub async fn get_alignment_mode(&self) -> ASCOMResult<AlignmentMode> {
+        Ok(AlignmentMode::GermanPolar)
     }
 
     /// Returns the current equatorial coordinate system used by this telescope (e.g. Topocentric or J2000).
-    pub async fn get_equatorial_system(&self) -> ASCOMResult<EquatorialSystemResponse> {
-        Ok(EquatorialSystemResponse::Topocentric)
+    pub async fn get_equatorial_system(&self) -> ASCOMResult<EquatorialSystem> {
+        Ok(EquatorialSystem::Topocentric)
     }
 
     /// The telescope's effective aperture diameter (meters)
@@ -88,7 +85,7 @@ impl StarAdventurer {
     }
 
     /// Indicates the pointing state of the mount
-    pub async fn get_side_of_pier(&self) -> ASCOMResult<PierSide> {
+    pub async fn get_side_of_pier(&self) -> ASCOMResult<SideOfPier> {
         Ok(*self.settings.pier_side.read().await)
     }
 
@@ -98,10 +95,7 @@ impl StarAdventurer {
     }
 
     /// Sets the pointing state of the mount
-    pub async fn set_side_of_pier(
-        &self,
-        _side: TelescopeSetSideOfPierRequestSideOfPier,
-    ) -> ASCOMResult<()> {
+    pub async fn set_side_of_pier(&self, _side: SideOfPier) -> ASCOMResult<()> {
         Err(ASCOMError::new(
             ASCOMErrorCode::NOT_IMPLEMENTED,
             "Side of pier control not implemented".to_string(),

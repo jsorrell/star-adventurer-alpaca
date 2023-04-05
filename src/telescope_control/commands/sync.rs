@@ -2,6 +2,7 @@ use super::target::Target;
 use crate::astro_math;
 use crate::telescope_control::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::api::SideOfPier;
 use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 impl StarAdventurer {
@@ -69,7 +70,7 @@ impl StarAdventurer {
         Ok(true)
     }
 
-    pub async fn set_pier_side_after_manual_move(&self, pier_side: PierSide) {
+    pub async fn set_pier_side_after_manual_move(&self, pier_side: SideOfPier) {
         *self.settings.pier_side.write().await = pier_side;
     }
 

@@ -4,26 +4,27 @@ use crate::astro_math;
 use crate::rotation_direction::RotationDirectionKey;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::api::SideOfPier;
 use ascom_alpaca::ASCOMResult;
 
 impl StarAdventurer {
-    pub fn calc_mech_ha_from_ha(ha: Hours, pier_side: PierSide) -> Hours {
+    pub fn calc_mech_ha_from_ha(ha: Hours, pier_side: SideOfPier) -> Hours {
         astro_math::modulo(
             match pier_side {
-                PierSide::East => ha - 6.,
-                PierSide::West => ha + 6.,
-                PierSide::Unknown => unreachable!(),
+                SideOfPier::East => ha - 6.,
+                SideOfPier::West => ha + 6.,
+                SideOfPier::Unknown => unreachable!(),
             },
             24.,
         )
     }
 
-    pub fn calc_ha_from_mech_ha(mech_ha: Hours, pier_side: PierSide) -> Hours {
+    pub fn calc_ha_from_mech_ha(mech_ha: Hours, pier_side: SideOfPier) -> Hours {
         astro_math::modulo(
             match pier_side {
-                PierSide::East => mech_ha + 6.,
-                PierSide::West => mech_ha - 6.,
-                PierSide::Unknown => unreachable!(),
+                SideOfPier::East => mech_ha + 6.,
+                SideOfPier::West => mech_ha - 6.,
+                SideOfPier::Unknown => unreachable!(),
             },
             24.,
         )
@@ -40,7 +41,7 @@ impl StarAdventurer {
         motor_pos: Degrees,
         mech_ha_offset: Hours,
         key: RotationDirectionKey,
-        pier_side: PierSide,
+        pier_side: SideOfPier,
     ) -> Hours {
         let mech_ha = Self::calc_mech_ha(motor_pos, mech_ha_offset, key);
         Self::calc_ha_from_mech_ha(mech_ha, pier_side)

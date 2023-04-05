@@ -12,7 +12,7 @@ use crate::util::*;
 use crate::{astro_math, config, Config};
 
 use super::commands::target::Target;
-use ascom_alpaca::api::DriveRate;
+use ascom_alpaca::api::{DriveRate, SideOfPier};
 use ascom_alpaca::ASCOMResult;
 
 pub enum DeclinationSlew {
@@ -121,7 +121,7 @@ pub(in crate::telescope_control) struct Settings {
     // Pos
     pub mech_ha_offset: RwLock<Hours>, // Mechanical HA, 0..24
     pub declination: RwLock<Degrees>,
-    pub pier_side: RwLock<PierSide>,
+    pub pier_side: RwLock<SideOfPier>,
 
     pub telescope_details: TelescopeDetails,
 }

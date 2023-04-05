@@ -1,25 +1,25 @@
 use crate::rotation_direction::*;
-use ascom_alpaca::api::PutPulseGuideDirection as GuideDirection;
+use ascom_alpaca::api::PutPulseGuideDirection;
 use std::fmt::Formatter;
 
-impl Into<GuideDirection> for ResolvedDirection {
-    fn into(self) -> GuideDirection {
+impl Into<PutPulseGuideDirection> for ResolvedDirection {
+    fn into(self) -> PutPulseGuideDirection {
         match (self.motor_direction, self.key.0) {
-            (Clockwise, RotationDirectionHemisphere::North) => GuideDirection::West,
-            (Clockwise, RotationDirectionHemisphere::South) => GuideDirection::East,
-            (CounterClockwise, RotationDirectionHemisphere::North) => GuideDirection::East,
-            (CounterClockwise, RotationDirectionHemisphere::South) => GuideDirection::West,
+            (Clockwise, RotationDirectionHemisphere::North) => PutPulseGuideDirection::West,
+            (Clockwise, RotationDirectionHemisphere::South) => PutPulseGuideDirection::East,
+            (CounterClockwise, RotationDirectionHemisphere::North) => PutPulseGuideDirection::East,
+            (CounterClockwise, RotationDirectionHemisphere::South) => PutPulseGuideDirection::West,
         }
     }
 }
 
-impl RotationDirection for GuideDirection {
+impl RotationDirection for PutPulseGuideDirection {
     fn using(self, key: RotationDirectionKey) -> ResolvedDirection {
         let d = match (self, key.0) {
-            (GuideDirection::West, RotationDirectionHemisphere::North) => Clockwise,
-            (GuideDirection::West, RotationDirectionHemisphere::South) => CounterClockwise,
-            (GuideDirection::East, RotationDirectionHemisphere::North) => CounterClockwise,
-            (GuideDirection::East, RotationDirectionHemisphere::South) => Clockwise,
+            (PutPulseGuideDirection::West, RotationDirectionHemisphere::North) => Clockwise,
+            (PutPulseGuideDirection::West, RotationDirectionHemisphere::South) => CounterClockwise,
+            (PutPulseGuideDirection::East, RotationDirectionHemisphere::North) => CounterClockwise,
+            (PutPulseGuideDirection::East, RotationDirectionHemisphere::South) => Clockwise,
             _ => panic!("Tried to get a rotation direction from {:?}", self),
         };
 

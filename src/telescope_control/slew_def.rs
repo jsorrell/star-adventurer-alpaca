@@ -5,6 +5,7 @@ use crate::telescope_control::connection::consts::{
 use crate::tracking_direction::TrackingDirection;
 use crate::util::*;
 use crate::StarAdventurer;
+use ascom_alpaca::api::SideOfPier;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -50,11 +51,11 @@ impl Slew {
     pub fn to_ha(
         current_mech_ha: Hours,
         target_ha: Hours,
-        current_pier_side: PierSide,
+        current_pier_side: SideOfPier,
         mount_limits: MountLimits,
     ) -> Self {
-        let east_ha = StarAdventurer::calc_ha_from_mech_ha(current_mech_ha, PierSide::East);
-        let west_ha = StarAdventurer::calc_ha_from_mech_ha(current_mech_ha, PierSide::West);
+        let east_ha = StarAdventurer::calc_ha_from_mech_ha(current_mech_ha, SideOfPier::East);
+        let west_ha = StarAdventurer::calc_ha_from_mech_ha(current_mech_ha, SideOfPier::West);
 
         Self::find_best(
             current_mech_ha,
@@ -63,22 +64,22 @@ impl Slew {
                 Self {
                     distance: modulo(target_ha - east_ha, 24.),
                     direction: TrackingDirection::WithTracking,
-                    meridian_flip: PierSide::East != current_pier_side,
+                    meridian_flip: SideOfPier::East != current_pier_side,
                 },
                 Self {
                     distance: 24. - modulo(target_ha - east_ha, 24.),
                     direction: TrackingDirection::AgainstTracking,
-                    meridian_flip: PierSide::East != current_pier_side,
+                    meridian_flip: SideOfPier::East != current_pier_side,
                 },
                 Self {
                     distance: modulo(target_ha - west_ha, 24.),
                     direction: TrackingDirection::WithTracking,
-                    meridian_flip: PierSide::West != current_pier_side,
+                    meridian_flip: SideOfPier::West != current_pier_side,
                 },
                 Self {
                     distance: 24. - modulo(target_ha - west_ha, 24.),
                     direction: TrackingDirection::AgainstTracking,
-                    meridian_flip: PierSide::West != current_pier_side,
+                    meridian_flip: SideOfPier::West != current_pier_side,
                 },
             ],
         )

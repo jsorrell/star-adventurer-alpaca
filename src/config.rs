@@ -1,6 +1,7 @@
 use crate::astro_math::Degrees;
 use crate::rotation_direction::RotationDirectionKey;
-use crate::{Hours, PierSide};
+use crate::Hours;
+use ascom_alpaca::api::SideOfPier;
 use serde::{Deserialize, Serialize};
 use synscan::AutoGuideSpeed;
 
@@ -80,7 +81,7 @@ pub struct Initialization {
     #[serde(default)]
     pub declination: Degrees,
     #[serde(with = "pier_side")]
-    pub pier_side: PierSide,
+    pub pier_side: SideOfPier,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -93,20 +94,20 @@ impl Default for Initialization {
             // Facing toward the equator and meridian on the east side
             hour_angle: -6.,
             declination: 0.,
-            pier_side: PierSide::East,
+            pier_side: SideOfPier::East,
         }
     }
 }
 
 mod pier_side {
-    use crate::PierSide;
+    use ascom_alpaca::api::SideOfPier;
     use core::fmt::Formatter;
     use serde::de::{Error, Visitor};
     use serde::{Deserializer, Serializer};
 
     struct PierSideVisitor;
     impl<'de> Visitor<'de> for PierSideVisitor {
-        type Value = PierSide;
+        type Value = SideOfPier;
 
         fn expecting(&self, formatter: &mut Formatter) -> core::fmt::Result {
             formatter.write_str("East or West")
@@ -118,25 +119,25 @@ mod pier_side {
         {
             let lower = v.to_lowercase();
             Ok(match &*lower {
-                "east" => PierSide::East,
-                "west" => PierSide::West,
+                "east" => SideOfPier::East,
+                "west" => SideOfPier::West,
                 _ => return Err(E::custom(format!("unknown pier side: \"{}\"", v))),
             })
         }
     }
 
-    pub fn serialize<S>(s: &PierSide, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(s: &SideOfPier, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_str(match s {
-            PierSide::East => "East",
-            PierSide::West => "West",
-            PierSide::Unknown => unreachable!(),
+            SideOfPier::East => "East",
+            SideOfPier::West => "West",
+            SideOfPier::Unknown => unreachable!(),
         })
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<PierSide, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SideOfPier, D::Error>
     where
         D: Deserializer<'de>,
     {

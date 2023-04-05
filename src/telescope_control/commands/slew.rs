@@ -13,7 +13,7 @@ use crate::util::*;
 
 use super::super::commands::target::Target;
 use super::super::star_adventurer::{DeclinationSlew, StarAdventurer};
-use ascom_alpaca::api::{Axis, AxisRate};
+use ascom_alpaca::api::{Axis, AxisRate, SideOfPier};
 use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 impl StarAdventurer {
@@ -491,7 +491,7 @@ impl StarAdventurer {
         &self,
         ra: Hours,
         _dec: Degrees,
-    ) -> ASCOMResult<PierSide> {
+    ) -> ASCOMResult<SideOfPier> {
         let current_pos = self.connection.get_pos().await?;
         let (observation_location, mech_ha_offset, date_offset, pier_side, mount_limits) = join!(
             async { *self.settings.observation_location.read().await },

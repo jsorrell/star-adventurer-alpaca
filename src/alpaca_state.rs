@@ -1,8 +1,8 @@
 use crate::consts::ALPACA_DATE_FMT;
 use crate::telescope_control::StarAdventurer;
 use ascom_alpaca::api::{
-    AlignmentModeResponse, Axis, AxisRate, Device, DriveRate, EquatorialSystemResponse,
-    PutPulseGuideDirection, SideOfPierResponse, Telescope, TelescopeSetSideOfPierRequestSideOfPier,
+    AlignmentMode, Axis, AxisRate, Device, DriveRate, EquatorialSystem, PutPulseGuideDirection,
+    SideOfPier, Telescope,
 };
 use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 use chrono::{DateTime, Utc};
@@ -34,8 +34,8 @@ impl Device for StarAdventurer {
             }
             "set_pier_side_after_manual_move" => {
                 let pier_side = match &*parameters {
-                    "east" => SideOfPierResponse::East,
-                    "west" => SideOfPierResponse::West,
+                    "east" => SideOfPier::East,
+                    "west" => SideOfPier::West,
                     _ => {
                         return Err(ASCOMError::new(
                             ASCOMErrorCode::INVALID_VALUE,
@@ -117,7 +117,7 @@ impl Device for StarAdventurer {
 
 #[async_trait::async_trait]
 impl Telescope for StarAdventurer {
-    async fn alignment_mode(&self) -> ASCOMResult<AlignmentModeResponse> {
+    async fn alignment_mode(&self) -> ASCOMResult<AlignmentMode> {
         self.get_alignment_mode().await
     }
 
@@ -229,7 +229,7 @@ impl Telescope for StarAdventurer {
         self.set_does_refraction(does_refraction).await
     }
 
-    async fn equatorial_system(&self) -> ASCOMResult<EquatorialSystemResponse> {
+    async fn equatorial_system(&self) -> ASCOMResult<EquatorialSystem> {
         self.get_equatorial_system().await
     }
 
@@ -273,14 +273,11 @@ impl Telescope for StarAdventurer {
         self.set_ra_rate(right_ascension_rate).await
     }
 
-    async fn side_of_pier(&self) -> ASCOMResult<SideOfPierResponse> {
+    async fn side_of_pier(&self) -> ASCOMResult<SideOfPier> {
         self.get_side_of_pier().await
     }
 
-    async fn set_side_of_pier(
-        &self,
-        side_of_pier: TelescopeSetSideOfPierRequestSideOfPier,
-    ) -> ASCOMResult<()> {
+    async fn set_side_of_pier(&self, side_of_pier: SideOfPier) -> ASCOMResult<()> {
         self.set_side_of_pier(side_of_pier).await
     }
 
@@ -354,10 +351,8 @@ impl Telescope for StarAdventurer {
         self.set_is_tracking(tracking).await
     }
 
-    async fn tracking_rate(&self) -> ASCOMResult<i32> {
-        self.get_tracking_rate()
-            .await
-            .map(|drive_rate| drive_rate.into())
+    async fn tracking_rate(&self) -> ASCOMResult<DriveRate> {
+        self.get_tracking_rate().await
     }
 
     async fn set_tracking_rate(&self, tracking_rate: DriveRate) -> ASCOMResult<()> {
@@ -374,21 +369,18 @@ impl Telescope for StarAdventurer {
         self.get_tracking_rates().await
     }
 
-    async fn utcdate(&self) -> ASCOMResult<String> {
+    async fn utc_date(&self) -> ASCOMResult<String> {
         self.get_utc_date()
             .await
             .map(|d| d.format(ALPACA_DATE_FMT).to_string())
     }
 
-    async fn set_utcdate(&self, utcdate: String) -> ASCOMResult<()> {
-        let get_utc_date = move || {
-            let t = DateTime::parse_from_str(&utcdate, ALPACA_DATE_FMT)?;
-            let naive_time = t.naive_utc();
-            Ok::<_, chrono::ParseError>(DateTime::<Utc>::from_utc(naive_time, Utc))
-        };
-
-        let d = match get_utc_date() {
-            Ok(d) => d,
+    async fn set_utc_date(&self, utc_date: String) -> ASCOMResult<()> {
+        let d = match DateTime::parse_from_str(&utc_date, ALPACA_DATE_FMT) {
+            Ok(t) => {
+                let naive_time = t.naive_utc();
+                DateTime::<Utc>::from_utc(naive_time, Utc)
+            }
             Err(_e) => {
                 return Err(ASCOMError::new(
                     ASCOMErrorCode::INVALID_VALUE,
@@ -416,7 +408,7 @@ impl Telescope for StarAdventurer {
         &self,
         right_ascension: f64,
         declination: f64,
-    ) -> ASCOMResult<SideOfPierResponse> {
+    ) -> ASCOMResult<SideOfPier> {
         self.predict_destination_side_of_pier(right_ascension, declination)
             .await
     }
