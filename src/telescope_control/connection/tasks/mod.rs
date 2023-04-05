@@ -11,6 +11,8 @@ pub use crate::telescope_control::connection::motor::MotorResult;
 use crate::telescope_control::connection::potential_connection::ConnectedState;
 use crate::telescope_control::connection::potential_connection::PotentialConnection;
 use crate::util::*;
+use ascom_alpaca::ASCOMResult;
+use async_trait::async_trait;
 
 mod abort_slew;
 mod move_motor;
@@ -19,7 +21,7 @@ mod pulse_guide;
 mod set_tracking;
 mod slew_to;
 
-pub type LongRunningTask = AbortableTask<AscomResult<()>, AscomResult<()>>;
+pub type LongRunningTask = AbortableTask<ASCOMResult<()>, ASCOMResult<()>>;
 
 pub enum AbortableTaskType {
     Parking(LongRunningTask),
@@ -51,7 +53,7 @@ impl HasCS for PotentialConnection {
 
 #[async_trait]
 pub trait LongTask {
-    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<WaitableTask<()>>>
+    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<WaitableTask<()>>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync;
@@ -72,7 +74,7 @@ pub trait LongTask {
 
 #[async_trait]
 pub trait ShortTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync;

@@ -3,38 +3,39 @@ use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::slew_def::Slew;
 use crate::telescope_control::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::ASCOMResult;
 use tokio::join;
 
 impl StarAdventurer {
     /// True if this telescope is capable of programmed parking (Park() method)
-    pub async fn can_park(&self) -> AscomResult<bool> {
+    pub async fn can_park(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// True if this telescope is capable of programmed unparking (UnPark() method)
-    pub async fn can_unpark(&self) -> AscomResult<bool> {
+    pub async fn can_unpark(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// True if the telescope has been put into the parked state by the seee Park() method.
     /// Set False by calling the Unpark() method.
-    pub async fn is_parked(&self) -> AscomResult<bool> {
+    pub async fn is_parked(&self) -> ASCOMResult<bool> {
         self.connection.is_parked().await
     }
 
     /// True if this telescope is capable of programmed setting of its park position (SetPark() method)
-    pub async fn can_set_park_pos(&self) -> AscomResult<bool> {
+    pub async fn can_set_park_pos(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// Sets the telescope's park position to be its current position.
-    pub async fn set_park_pos(&self) -> AscomResult<()> {
+    pub async fn set_park_pos(&self) -> ASCOMResult<()> {
         *self.settings.park_ha.write().await = self.get_mech_ha().await?;
         Ok(())
     }
 
     /// Move the telescope to its park position, stop all motion, and set AtPark to True.
-    pub async fn park(&self) -> AscomResult<()> {
+    pub async fn park(&self) -> ASCOMResult<()> {
         let current_motor_pos = self.connection.get_pos().await?;
 
         let (park_ha, key, mech_ha_offset, mount_limits) = join!(
@@ -62,7 +63,7 @@ impl StarAdventurer {
     }
 
     /// Takes telescope out of the Parked state.
-    pub async fn unpark(&self) -> AscomResult<()> {
+    pub async fn unpark(&self) -> ASCOMResult<()> {
         self.connection.unpark().await?;
         Ok(())
     }

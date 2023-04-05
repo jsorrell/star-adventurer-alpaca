@@ -1,23 +1,17 @@
-use rocket::form::FromFormField;
-use serde_repr::{Deserialize_repr, Serialize_repr};
+pub use ascom_alpaca::api::SideOfPierResponse as PierSide;
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone, Serialize_repr, Deserialize_repr, FromFormField)]
-#[repr(i8)]
-pub enum PierSide {
-    #[field(value = "-1")]
-    Unknown = -1,
-    #[field(value = "0")]
-    East = 0,
-    #[field(value = "1")]
-    West = 1,
+pub trait PierSideExt {
+    fn is_unknown(&self) -> bool;
+    fn opposite(self) -> Self;
+    fn flip(&mut self);
 }
 
-impl PierSide {
-    pub fn is_unknown(&self) -> bool {
+impl PierSideExt for PierSide {
+    fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown)
     }
 
-    pub fn opposite(self) -> Self {
+    fn opposite(self) -> Self {
         match self {
             PierSide::Unknown => self,
             PierSide::East => PierSide::West,
@@ -25,7 +19,7 @@ impl PierSide {
         }
     }
 
-    pub fn flip(&mut self) {
+    fn flip(&mut self) {
         match self {
             PierSide::Unknown => {}
             PierSide::East => *self = PierSide::West,

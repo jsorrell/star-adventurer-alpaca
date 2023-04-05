@@ -23,7 +23,7 @@ impl MC {
 
                 if let Err(e) = &r {
                     if try_no < NUM_TRIES {
-                        log::warn!("Error sending command to driver: {} -- Retrying", e);
+                        tracing::warn!("Error sending command to driver: {} -- Retrying", e);
                     }
                 }
                 r

@@ -157,7 +157,7 @@ impl MotorState {
 
     pub fn from_after_state(
         rs: AfterSlewState,
-        tracking_rate: TrackingRate,
+        tracking_rate: DriveRate,
         tracking_direction: Direction,
     ) -> Self {
         match rs {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::telescope_control::connection::motor::locked::HasMotor;
+use async_trait::async_trait;
 use std::time::Duration;
 use synscan::DriveMode;
 use tokio::time;

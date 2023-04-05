@@ -13,11 +13,13 @@ use crate::util::*;
 
 use super::super::commands::target::Target;
 use super::super::star_adventurer::{DeclinationSlew, StarAdventurer};
+use ascom_alpaca::api::{Axis, AxisRate};
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 impl StarAdventurer {
     /// True if telescope is currently moving in response to one of the Slew methods or the MoveAxis(TelescopeAxes, Double) method
     /// False at all other times.
-    pub async fn is_slewing(&self) -> AscomResult<bool> {
+    pub async fn is_slewing(&self) -> ASCOMResult<bool> {
         Ok(matches!(
             &*self.dec_slew.read().await,
             DeclinationSlew::Waiting { .. }
@@ -25,12 +27,12 @@ impl StarAdventurer {
     }
 
     /// Returns the post-slew settling time (sec.)
-    pub async fn get_slew_settle_time(&self) -> AscomResult<u32> {
+    pub async fn get_slew_settle_time(&self) -> ASCOMResult<u32> {
         Ok(*self.settings.post_slew_settle_time.read().await)
     }
 
     /// Sets the post-slew settling time (integer sec.).
-    pub async fn set_slew_settle_time(&self, time: u32) -> AscomResult<()> {
+    pub async fn set_slew_settle_time(&self, time: u32) -> ASCOMResult<()> {
         *self.settings.post_slew_settle_time.write().await = time;
         Ok(())
     }
@@ -62,11 +64,11 @@ impl StarAdventurer {
     }
 
     /// Immediately Stops a slew in progress.
-    pub async fn abort_slew(&self) -> AscomResult<()> {
+    pub async fn abort_slew(&self) -> ASCOMResult<()> {
         // Spec wants this for some reason
         if self.connection.is_parked().await? {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidWhileParked,
+            return Err(ASCOMError::new(
+                ASCOMErrorCode::INVALID_WHILE_PARKED,
                 "Can't abort slew while parked".to_string(),
             ));
         }
@@ -81,9 +83,9 @@ impl StarAdventurer {
         Ok(())
     }
 
-    pub(in crate::telescope_control) fn get_axis_rate_range() -> AxisRateRange {
+    pub(in crate::telescope_control) fn get_axis_rate_range() -> AxisRate {
         // experimentally, 1_103 to 16_000_000 for period
-        AxisRateRange {
+        AxisRate {
             // TODO are these accurate? testing needed
             minimum: consts::MIN_SPEED,
             maximum: consts::SLEW_SPEED_WITH_TRACKING.min(consts::SLEW_SPEED_AGAINST_TRACKING),
@@ -91,11 +93,11 @@ impl StarAdventurer {
     }
 
     /// The rates at which the telescope may be moved about the specified axis by the MoveAxis(TelescopeAxes, Double) method.
-    pub async fn get_axis_rates(&self, axis: Axis) -> AscomResult<Vec<AxisRateRange>> {
+    pub async fn get_axis_rates(&self, axis: Axis) -> ASCOMResult<Vec<AxisRate>> {
         Ok(if axis == Axis::Primary {
             vec![Self::get_axis_rate_range()]
         } else {
-            vec![AxisRateRange {
+            vec![AxisRate {
                 minimum: 0.,
                 maximum: 0.,
             }]
@@ -103,19 +105,19 @@ impl StarAdventurer {
     }
 
     /// True if this telescope can move the requested axis.
-    pub async fn can_move_axis(&self, axis: Axis) -> AscomResult<bool> {
+    pub async fn can_move_axis(&self, axis: Axis) -> ASCOMResult<bool> {
         Ok(axis == Axis::Primary)
     }
 
     /// True if this telescope is capable of programmed finding its home position (FindHome() method).
-    pub async fn can_find_home(&self) -> AscomResult<bool> {
+    pub async fn can_find_home(&self) -> ASCOMResult<bool> {
         Ok(false)
     }
 
     /// Locates the telescope's "home" position (synchronous)
-    pub async fn find_home(&self) -> AscomResult<()> {
-        Err(AscomError::from_msg(
-            AscomErrorType::PropertyOrMethodNotImplemented,
+    pub async fn find_home(&self) -> ASCOMResult<()> {
+        Err(ASCOMError::new(
+            ASCOMErrorCode::NOT_IMPLEMENTED,
             "Home is not implemented".to_string(),
         ))
     }
@@ -123,25 +125,25 @@ impl StarAdventurer {
     /// Move the telescope in one axis at the given rate.
     /// Rate in deg/sec
     /// TODO Does this stop other slewing? Returning an error for now
-    pub async fn move_axis(&self, axis: Axis, rate: Degrees) -> AscomResult<()> {
+    pub async fn move_axis(&self, axis: Axis, rate: Degrees) -> ASCOMResult<()> {
         if axis != Axis::Primary {
-            return Err(AscomError::from_msg(
-                AscomErrorType::PropertyOrMethodNotImplemented,
+            return Err(ASCOMError::new(
+                ASCOMErrorCode::NOT_IMPLEMENTED,
                 "Can only slew on primary axis".to_string(),
             ));
         }
 
         // rate of 0 is just an alias for killing slews (i think) so we can redirect there
         if rate == 0. {
-            log::info!("Redirecting moveaxis to abort");
+            tracing::info!("Redirecting moveaxis to abort");
             return self.abort_slew().await;
         }
 
         if !(self.connection.get_min_speed().await?..=self.connection.get_max_speed().await?)
             .contains(&rate.abs())
         {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidValue,
+            return Err(ASCOMError::new(
+                ASCOMErrorCode::INVALID_VALUE,
                 "Rate is invalid".to_string(),
             ));
         }
@@ -403,9 +405,9 @@ impl StarAdventurer {
         dec: Degrees,
         current_pos: Degrees,
         key: RotationDirectionKey,
-    ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    ) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         /* RA */
-        log::warn!(
+        tracing::warn!(
             "Starting slew estimated to take {}s",
             slew.estimate_slew_time().as_secs()
         );
@@ -441,7 +443,7 @@ impl StarAdventurer {
         &self,
         ha: Hours,
         dec: Degrees,
-    ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    ) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         /* RA */
         let current_pos = self.connection.get_pos().await?;
         let (observation_location, mech_ha_offset, pier_side, mount_limits) = join!(
@@ -463,7 +465,7 @@ impl StarAdventurer {
         &self,
         ra: Hours,
         dec: Degrees,
-    ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    ) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         /* RA */
         let current_pos = self.connection.get_pos().await?;
         let (observation_location, mech_ha_offset, date_offset, pier_side, mount_limits) = join!(
@@ -489,7 +491,7 @@ impl StarAdventurer {
         &self,
         ra: Hours,
         _dec: Degrees,
-    ) -> AscomResult<PierSide> {
+    ) -> ASCOMResult<PierSide> {
         let current_pos = self.connection.get_pos().await?;
         let (observation_location, mech_ha_offset, date_offset, pier_side, mount_limits) = join!(
             async { *self.settings.observation_location.read().await },
@@ -517,7 +519,7 @@ impl StarAdventurer {
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return immediately after the slew starts
     /// The client can poll the Slewing method to determine when the mount reaches the intended coordinates.
-    pub async fn slew_to_target_async(&self) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    pub async fn slew_to_target_async(&self) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         // Ensure target is set
         let target = *self.settings.target.read().await;
         let ra = target.try_get_right_ascension()?;
@@ -527,13 +529,13 @@ impl StarAdventurer {
     }
 
     /// Move the telescope to the TargetRightAscension and TargetDeclination equatorial coordinates, return when slew is complete
-    pub async fn slew_to_target(&self) -> AscomResult<()> {
+    pub async fn slew_to_target(&self) -> ASCOMResult<()> {
         self.slew_to_target_async().await?.await
     }
 
     /* Coordinates */
     /// True if this telescope is capable of programmed asynchronous slewing to equatorial coordinates.
-    pub async fn can_slew_async(&self) -> AscomResult<bool> {
+    pub async fn can_slew_async(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
@@ -543,7 +545,7 @@ impl StarAdventurer {
         &self,
         ra: Hours,
         dec: Degrees,
-    ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    ) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         check_ra(ra)?;
         check_dec(dec)?;
 
@@ -556,19 +558,19 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to equatorial coordinates
-    pub async fn can_slew(&self) -> AscomResult<bool> {
+    pub async fn can_slew(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given equatorial coordinates, return when slew is complete
-    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> AscomResult<()> {
+    pub async fn slew_to_coordinates(&self, ra: Hours, dec: Degrees) -> ASCOMResult<()> {
         self.slew_to_coordinates_async(ra, dec).await?.await
     }
 
     /* Alt Az */
 
     /// True if this telescope is capable of programmed asynchronous slewing to local horizontal coordinates
-    pub async fn can_slew_alt_az_async(&self) -> AscomResult<bool> {
+    pub async fn can_slew_alt_az_async(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
@@ -578,7 +580,7 @@ impl StarAdventurer {
         &self,
         alt: Degrees,
         az: Degrees,
-    ) -> AscomResult<impl Future<Output = AscomResult<()>>> {
+    ) -> ASCOMResult<impl Future<Output = ASCOMResult<()>>> {
         check_alt(alt)?;
         check_az(az)?;
 
@@ -592,19 +594,19 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of programmed slewing (synchronous or asynchronous) to local horizontal coordinates
-    pub async fn can_slew_alt_az(&self) -> AscomResult<bool> {
+    pub async fn can_slew_alt_az(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// Move the telescope to the given local horizontal coordinates, return when slew is complete
-    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> AscomResult<()> {
+    pub async fn slew_to_alt_az(&self, alt: Degrees, az: Degrees) -> ASCOMResult<()> {
         self.slew_to_alt_az_async(alt, az).await?.await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util;
+    use crate::telescope_control::test_util;
 
     #[tokio::test]
     async fn test_slew() {

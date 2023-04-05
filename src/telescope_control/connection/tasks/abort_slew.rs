@@ -1,6 +1,8 @@
 use crate::telescope_control::connection::ascom_state::*;
 
 use super::*;
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
+use async_trait::async_trait;
 
 pub struct AbortSlewTask {}
 
@@ -12,7 +14,7 @@ impl AbortSlewTask {
 
 #[async_trait]
 impl ShortTask for AbortSlewTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -22,8 +24,8 @@ impl ShortTask for AbortSlewTask {
 
         let restorable_state = match &cs.ascom_state {
             AscomState::Parked => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
+                return Ok(Err(ASCOMError::new(
+                    ASCOMErrorCode::INVALID_WHILE_PARKED,
                     "Can't abort slew while parked".to_string(),
                 )));
             }

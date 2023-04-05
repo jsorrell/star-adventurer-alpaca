@@ -4,38 +4,40 @@ use tokio::time::Duration;
 use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::api::PutPulseGuideDirection;
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 impl StarAdventurer {
     /// True if the guide rate properties used for PulseGuide(GuideDirections, Int32) can ba adjusted.
-    pub async fn can_set_guide_rates(&self) -> AscomResult<bool> {
+    pub async fn can_set_guide_rates(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
     /// The current Declination movement rate offset for telescope guiding (degrees/sec)
-    pub async fn get_guide_rate_declination(&self) -> AscomResult<Degrees> {
+    pub async fn get_guide_rate_declination(&self) -> ASCOMResult<Degrees> {
         Ok(0.)
     }
 
     /// Sets the current Declination movement rate offset for telescope guiding (degrees/sec).
-    pub async fn set_guide_rate_declination(&self, _rate: Degrees) -> AscomResult<()> {
+    pub async fn set_guide_rate_declination(&self, _rate: Degrees) -> ASCOMResult<()> {
         // This must "function" per ASCOM specs
         Ok(())
     }
 
     /// The current RightAscension movement rate offset for telescope guiding (degrees/sec)
-    pub async fn get_guide_rate_ra(&self) -> AscomResult<Degrees> {
+    pub async fn get_guide_rate_ra(&self) -> ASCOMResult<Degrees> {
         Ok(self.settings.autoguide_speed.read().await.multiplier()
-            * Degrees::from(*self.settings.tracking_rate.read().await))
+            * (*self.settings.tracking_rate.read().await).to_degrees())
     }
 
     /// Sets the current RightAscension movement rate offset for telescope guiding (degrees/sec).
-    pub async fn set_guide_rate_ra(&self, rate: Degrees) -> AscomResult<()> {
-        let tracking_rate_deg = Degrees::from(*self.settings.tracking_rate.read().await);
+    pub async fn set_guide_rate_ra(&self, rate: Degrees) -> ASCOMResult<()> {
+        let tracking_rate_deg = (*self.settings.tracking_rate.read().await).to_degrees();
         let lowest_guide_rate = AutoGuideSpeed::Eighth.multiplier() * tracking_rate_deg;
         let highest_guide_rate = AutoGuideSpeed::One.multiplier() * tracking_rate_deg;
         if rate < lowest_guide_rate * 0.9 || highest_guide_rate * 1.1 < rate {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidValue,
+            return Err(ASCOMError::new(
+                ASCOMErrorCode::INVALID_VALUE,
                 format!(
                     "Guide rate must be between {} and {}",
                     lowest_guide_rate, highest_guide_rate
@@ -73,7 +75,7 @@ impl StarAdventurer {
     }
 
     /// True if this telescope is capable of software-pulsed guiding (via the PulseGuide(GuideDirections, Int32) method)
-    pub async fn can_pulse_guide(&self) -> AscomResult<bool> {
+    pub async fn can_pulse_guide(&self) -> ASCOMResult<bool> {
         Ok(true)
     }
 
@@ -81,18 +83,20 @@ impl StarAdventurer {
     /// Synchronous b/c only one axis is guideable
     pub async fn pulse_guide(
         &self,
-        guide_direction: GuideDirection,
+        guide_direction: PutPulseGuideDirection,
         duration: u32,
-    ) -> AscomResult<()> {
-        if guide_direction == GuideDirection::North || guide_direction == GuideDirection::South {
-            return Err(AscomError::from_msg(
-                AscomErrorType::PropertyOrMethodNotImplemented,
+    ) -> ASCOMResult<()> {
+        if guide_direction == PutPulseGuideDirection::North
+            || guide_direction == PutPulseGuideDirection::South
+        {
+            return Err(ASCOMError::new(
+                ASCOMErrorCode::NOT_IMPLEMENTED,
                 "Can't guide in declination".to_string(),
             ));
         }
 
         let guide_speed = self.settings.autoguide_speed.read().await.multiplier()
-            * Degrees::from(*self.settings.tracking_rate.read().await);
+            * (*self.settings.tracking_rate.read().await).to_degrees();
         let guide_direction = guide_direction
             .using(
                 self.settings
@@ -114,7 +118,7 @@ impl StarAdventurer {
     }
 
     /// True if a PulseGuide(GuideDirections, Int32) command is in progress, False otherwise
-    pub async fn is_pulse_guiding(&self) -> AscomResult<bool> {
+    pub async fn is_pulse_guiding(&self) -> ASCOMResult<bool> {
         Ok(self.connection.is_guiding().await?)
     }
 }

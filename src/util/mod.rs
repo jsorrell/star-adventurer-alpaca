@@ -27,7 +27,7 @@ mod lockable;
 mod result;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
-pub struct AxisRateRange {
+pub struct AxisRate {
     #[serde(rename = "Maximum")]
     pub(crate) maximum: f64,
     #[serde(rename = "Minimum")]

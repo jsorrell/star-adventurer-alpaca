@@ -72,7 +72,7 @@ impl MotorBuilder {
             self.path.clone().unwrap()
         } else {
             let port = Self::determine_serial_port()?;
-            log::warn!("Found StarAdventurer COM port at {}", port);
+            tracing::warn!("Found StarAdventurer COM port at {}", port);
             port
         };
         let timeout = self

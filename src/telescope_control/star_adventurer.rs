@@ -12,6 +12,8 @@ use crate::util::*;
 use crate::{astro_math, config, Config};
 
 use super::commands::target::Target;
+use ascom_alpaca::api::DriveRate;
+use ascom_alpaca::ASCOMResult;
 
 pub enum DeclinationSlew {
     Waiting {
@@ -32,6 +34,12 @@ pub struct StarAdventurer {
     pub(in crate::telescope_control) settings: Settings,
     pub(in crate::telescope_control) connection: Connection,
     pub(in crate::telescope_control) dec_slew: RwLock<DeclinationSlew>,
+}
+
+impl std::fmt::Debug for StarAdventurer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StarAdventurer").finish_non_exhaustive()
+    }
 }
 
 impl StarAdventurer {
@@ -56,13 +64,13 @@ impl StarAdventurer {
         self.connection.read().await.is_connected()
     }
 
-    pub async fn connect(&self) -> AscomResult<()> {
+    pub async fn connect(&self) -> ASCOMResult<()> {
         self.connection
             .connect(*self.settings.autoguide_speed.read().await)
             .await
     }
 
-    pub async fn disconnect(&self) -> AscomResult<()> {
+    pub async fn disconnect(&self) -> ASCOMResult<()> {
         self.connection.disconnect().await;
         Ok(())
     }
@@ -80,7 +88,7 @@ impl StarAdventurer {
         astro_math::modulo(unmoduloed_angle, 24.)
     }
 
-    pub(in crate::telescope_control) async fn get_mech_ha(&self) -> AscomResult<Hours> {
+    pub(in crate::telescope_control) async fn get_mech_ha(&self) -> ASCOMResult<Hours> {
         let pos = self.connection.get_pos().await?;
         let (mech_ha_offset, obs_loc) = join!(
             async { *self.settings.mech_ha_offset.read().await },
@@ -108,7 +116,7 @@ pub(in crate::telescope_control) struct Settings {
     pub post_slew_settle_time: RwLock<u32>,
     pub autoguide_speed: RwLock<AutoGuideSpeed>, // Set to motor on connection
 
-    pub tracking_rate: RwLock<TrackingRate>, // Read from motor on connection
+    pub tracking_rate: RwLock<DriveRate>, // Read from motor on connection
 
     // Pos
     pub mech_ha_offset: RwLock<Hours>, // Mechanical HA, 0..24
@@ -138,7 +146,7 @@ impl Settings {
             date_offset: RwLock::new(chrono::Duration::zero()), // Assume using computer time
             post_slew_settle_time: RwLock::new(config.other.slew_settle_time),
             target: RwLock::new(Target::default()), // No target initially
-            tracking_rate: RwLock::new(TrackingRate::Sidereal),
+            tracking_rate: RwLock::new(DriveRate::Sidereal),
             instant_dec_slew: RwLock::new(config.other.instant_dec_slew),
             telescope_details: config.telescope_details,
         }
