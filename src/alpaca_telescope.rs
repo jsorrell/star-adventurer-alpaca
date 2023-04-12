@@ -69,7 +69,7 @@ pub async fn get_can_set_guide_rates(state: &AlpacaState) -> AscomResult<bool> {
 
 #[alpaca_handler]
 pub async fn get_can_set_park(state: &AlpacaState) -> AscomResult<bool> {
-    state.sa.can_park().await
+    state.sa.can_set_park_pos().await
 }
 
 #[alpaca_handler]
@@ -415,8 +415,8 @@ pub async fn put_pulse_guide(data: PulseGuideData, state: &AlpacaState) -> Ascom
 }
 
 #[alpaca_handler]
-pub async fn put_set_park(state: &AlpacaState) -> AscomResult<bool> {
-    state.sa.can_set_park_pos().await
+pub async fn put_set_park(state: &AlpacaState) -> AscomResult<()> {
+    state.sa.set_park_pos().await
 }
 
 #[alpaca_handler]
