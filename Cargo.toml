@@ -23,3 +23,4 @@ ascom-alpaca = { version = "0.1.0", path = "../ascom-alpaca-rs", features = ["se
 tracing-subscriber = "0.3.16"
 anyhow = "1.0.70"
 tracing = "0.1.37"
+net-literals = "0.2.0"

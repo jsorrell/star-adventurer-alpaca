@@ -8,6 +8,7 @@ mod util;
 use ascom_alpaca::api::CargoServerInfo;
 use ascom_alpaca::Server;
 use config::Config;
+use net_literals::addr;
 use telescope_control::StarAdventurer;
 use util::*;
 
@@ -20,12 +21,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut server = Server {
         info: CargoServerInfo!(),
+        listen_addr: addr!("127.0.0.1:8000"),
         ..Default::default()
     };
     server.devices.register(sa);
 
-    server
-        .listen_addr
-        .set_ip(std::net::Ipv4Addr::LOCALHOST.into());
-    server.start_server().await
+    server.start().await
 }
