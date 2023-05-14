@@ -1,7 +1,7 @@
 use crate::telescope_control::StarAdventurer;
 use crate::util::*;
 use ascom_alpaca::api::DriveRate;
-use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
+use ascom_alpaca::{ASCOMError, ASCOMResult};
 
 impl StarAdventurer {
     /// True if the Tracking property can be changed, turning telescope sidereal tracking on and off.
@@ -21,10 +21,7 @@ impl StarAdventurer {
 
     /// Sets the right ascension tracking rate (arcseconds per second)
     pub async fn set_ra_rate(&self, _rate: f64) -> ASCOMResult<()> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Setting RA tracking rate is not supported".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     /// The declination tracking rate (arcseconds per second, default = 0.0)
@@ -39,10 +36,7 @@ impl StarAdventurer {
 
     /// Sets the declination tracking rate (arcseconds per second)
     pub async fn set_declination_rate(&self, _rate: f64) -> ASCOMResult<()> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Declination tracking not available".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     /// Returns an array of supported DriveRates values that describe the permissible values of the DriveRate property for this telescope type.
@@ -87,7 +81,7 @@ impl StarAdventurer {
 
     /// Returns the state of the telescope's sidereal tracking drive.
     pub async fn is_tracking(&self) -> ASCOMResult<bool> {
-        Ok(self.connection.is_tracking().await?)
+        self.connection.is_tracking().await
     }
 
     /// Sets the state of the telescope's sidereal tracking drive.

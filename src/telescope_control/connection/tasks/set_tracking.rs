@@ -32,10 +32,7 @@ impl ShortTask for StopTrackingTask {
                 return Ok(Ok(()));
             }
             AscomState::Slewing(SlewingState::MoveAxis(_, GuideState::Idle)) => {
-                return Ok(Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't stop tracking while moving axis".to_string(),
-                )));
+                return Ok(Err(ASCOMError::invalid_operation("Can't stop tracking while moving axis")));
             }
             AscomState::Idle(GuideState::Guiding) => unreachable!(),
             AscomState::Tracking(GuideState::Guiding) => unreachable!(),
@@ -93,10 +90,7 @@ impl ShortTask for StartTrackingTask {
                 }
             }
             AscomState::Slewing(SlewingState::MoveAxis(_, GuideState::Idle)) => {
-                return Ok(Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't start tracking while moving axis".to_string(),
-                )));
+                return Ok(Err(ASCOMError::invalid_operation("Can't start tracking while moving axis")));
             }
             AscomState::Idle(GuideState::Guiding) => unreachable!(),
             AscomState::Tracking(GuideState::Guiding) => unreachable!(),

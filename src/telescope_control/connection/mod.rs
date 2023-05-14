@@ -258,16 +258,10 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't start tracking while slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't start tracking while slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't start tracking while parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't start tracking while parking"));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -286,16 +280,10 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't stop tracking while slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't stop tracking while slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't stop tracking while parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't stop tracking while parking"));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -336,16 +324,10 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't move motor while slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_operation("Can't move motor while slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't move motor while parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_operation("Can't move motor while parking"));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -368,22 +350,13 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't guide while slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_operation("Can't guide while slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Can't guide while parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_operation("Can't guide while parking"));
             }
             AbortableTaskType::Guiding(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_OPERATION,
-                    "Already guiding".to_string(),
-                ));
+                return Err(ASCOMError::invalid_operation("Already guiding"));
             }
             AbortableTaskType::None => {}
         }
@@ -404,16 +377,10 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Already slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Already slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't slew while parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't slew while parking"));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -434,16 +401,10 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Can't park while slewing".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Can't park while slewing"));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Already parking".to_string(),
-                ));
+                return Err(ASCOMError::invalid_value("Already parking"));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;

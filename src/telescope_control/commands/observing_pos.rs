@@ -4,7 +4,7 @@ use tokio::join;
 use crate::astro_math;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
-use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
+use ascom_alpaca::{ASCOMError, ASCOMResult};
 
 impl StarAdventurer {
     /*** Date ***/
@@ -38,13 +38,10 @@ impl StarAdventurer {
     /// Sets the observing site's latitude (degrees).
     pub async fn set_latitude(&self, latitude: Degrees) -> ASCOMResult<()> {
         if !(-90. ..=90.).contains(&latitude) {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                format!(
-                    "Latitude of {} is outside the valid range of -90 to 90",
-                    latitude
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Latitude of {} is outside the valid range of -90 to 90",
+                latitude
+            )));
         }
         self.settings.observation_location.write().await.latitude = latitude;
         Ok(())
@@ -60,13 +57,10 @@ impl StarAdventurer {
     /// Sets the observing site's longitude (degrees, positive East, WGS84).
     pub async fn set_longitude(&self, longitude: Degrees) -> ASCOMResult<()> {
         if !(-180. ..=180.).contains(&longitude) {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                format!(
-                    "Longitude of {} is outside the valid range of -180 to 180",
-                    longitude
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Longitude of {} is outside the valid range of -180 to 180",
+                longitude
+            )));
         }
         self.settings.observation_location.write().await.longitude = longitude;
         Ok(())
@@ -82,13 +76,10 @@ impl StarAdventurer {
     /// Sets the elevation above mean sea level (metres) of the site at which the telescope is located.
     pub async fn set_elevation(&self, elevation: f64) -> ASCOMResult<()> {
         if !(-300. ..=10000.).contains(&elevation) {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                format!(
-                    "Elevation of {} is outside the valid range of -300 to 10000",
-                    elevation
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Elevation of {} is outside the valid range of -300 to 10000",
+                elevation
+            )));
         }
         self.settings.observation_location.write().await.elevation = elevation;
         Ok(())

@@ -78,10 +78,7 @@ impl StarAdventurer {
     /// Tell the telescope or driver whether to apply atmospheric refraction to coordinates.
     pub async fn set_does_refraction(&self, _does_refraction: bool) -> ASCOMResult<()> {
         // TODO implement this?
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Refraction calculations not available".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     /// Indicates the pointing state of the mount
@@ -96,9 +93,6 @@ impl StarAdventurer {
 
     /// Sets the pointing state of the mount
     pub async fn set_side_of_pier(&self, _side: SideOfPier) -> ASCOMResult<()> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Side of pier control not implemented".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 }

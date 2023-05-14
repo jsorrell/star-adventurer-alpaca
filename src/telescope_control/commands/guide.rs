@@ -5,7 +5,7 @@ use crate::rotation_direction::RotationDirection;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
 use ascom_alpaca::api::PutPulseGuideDirection;
-use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
+use ascom_alpaca::{ASCOMError, ASCOMResult};
 
 impl StarAdventurer {
     /// True if the guide rate properties used for PulseGuide(GuideDirections, Int32) can ba adjusted.
@@ -36,13 +36,10 @@ impl StarAdventurer {
         let lowest_guide_rate = AutoGuideSpeed::Eighth.multiplier() * tracking_rate_deg;
         let highest_guide_rate = AutoGuideSpeed::One.multiplier() * tracking_rate_deg;
         if rate < lowest_guide_rate * 0.9 || highest_guide_rate * 1.1 < rate {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                format!(
-                    "Guide rate must be between {} and {}",
-                    lowest_guide_rate, highest_guide_rate
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Guide rate must be between {} and {}",
+                lowest_guide_rate, highest_guide_rate
+            )));
         }
 
         let (best_speed, _distance) = [
@@ -89,8 +86,7 @@ impl StarAdventurer {
         if guide_direction == PutPulseGuideDirection::North
             || guide_direction == PutPulseGuideDirection::South
         {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::NOT_IMPLEMENTED,
+            return Err(ASCOMError::invalid_value(
                 "Can't guide in declination".to_string(),
             ));
         }
@@ -108,8 +104,7 @@ impl StarAdventurer {
             .into();
         let guide_rate = MotionRate::new(guide_speed, guide_direction);
 
-        let _completed = self
-            .connection
+        self.connection
             .pulse_guide(guide_rate, Duration::from_millis(duration as u64))
             .await?
             .await

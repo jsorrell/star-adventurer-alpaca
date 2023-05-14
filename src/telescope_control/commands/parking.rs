@@ -58,7 +58,7 @@ impl StarAdventurer {
         let pos_change = astro_math::hours_to_deg(slew.distance()) * motor_direction.get_sign_f64();
         let dest_motor_pos = current_motor_pos + pos_change;
 
-        let _completed = self.connection.park(dest_motor_pos).await?.await.unwrap()?;
+        self.connection.park(dest_motor_pos).await?.await.unwrap()?;
         Ok(())
     }
 

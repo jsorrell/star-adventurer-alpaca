@@ -116,10 +116,7 @@ impl StarAdventurer {
 
     /// Locates the telescope's "home" position (synchronous)
     pub async fn find_home(&self) -> ASCOMResult<()> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Home is not implemented".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     /// Move the telescope in one axis at the given rate.
@@ -127,10 +124,7 @@ impl StarAdventurer {
     /// TODO Does this stop other slewing? Returning an error for now
     pub async fn move_axis(&self, axis: Axis, rate: Degrees) -> ASCOMResult<()> {
         if axis != Axis::Primary {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::NOT_IMPLEMENTED,
-                "Can only slew on primary axis".to_string(),
-            ));
+            return Err(ASCOMError::invalid_value("Can only slew on primary axis"));
         }
 
         // rate of 0 is just an alias for killing slews (i think) so we can redirect there
@@ -142,10 +136,7 @@ impl StarAdventurer {
         if !(self.connection.get_min_speed().await?..=self.connection.get_max_speed().await?)
             .contains(&rate.abs())
         {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                "Rate is invalid".to_string(),
-            ));
+            return Err(ASCOMError::invalid_value("Rate is invalid"));
         }
 
         let target_direction = if rate < 0. {

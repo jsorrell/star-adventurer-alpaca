@@ -1,7 +1,6 @@
 mod alpaca_state;
 mod astro_math;
 pub mod config;
-mod consts;
 mod telescope_control;
 mod util;
 
@@ -13,7 +12,7 @@ use telescope_control::StarAdventurer;
 use util::*;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> eyre::Result<std::convert::Infallible> {
     tracing_subscriber::fmt::init();
 
     let config = confy::load_path("config.toml").expect("Couldn't parse configuration");

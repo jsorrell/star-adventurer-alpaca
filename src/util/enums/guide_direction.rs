@@ -2,9 +2,9 @@ use crate::rotation_direction::*;
 use ascom_alpaca::api::PutPulseGuideDirection;
 use std::fmt::Formatter;
 
-impl Into<PutPulseGuideDirection> for ResolvedDirection {
-    fn into(self) -> PutPulseGuideDirection {
-        match (self.motor_direction, self.key.0) {
+impl From<ResolvedDirection> for PutPulseGuideDirection {
+    fn from(dir: ResolvedDirection) -> PutPulseGuideDirection {
+        match (dir.motor_direction, dir.key.0) {
             (Clockwise, RotationDirectionHemisphere::North) => PutPulseGuideDirection::West,
             (Clockwise, RotationDirectionHemisphere::South) => PutPulseGuideDirection::East,
             (CounterClockwise, RotationDirectionHemisphere::North) => PutPulseGuideDirection::East,

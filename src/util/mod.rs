@@ -10,8 +10,6 @@ pub use lockable::*;
 pub use result::*;
 pub use tasks::*;
 
-pub use crate::consts::*;
-
 mod abort_result;
 mod tasks {
     pub use abortable_task::*;

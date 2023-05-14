@@ -1,11 +1,12 @@
-use crate::consts::ALPACA_DATE_FMT;
 use crate::telescope_control::StarAdventurer;
 use ascom_alpaca::api::{
     AlignmentMode, Axis, AxisRate, Device, DriveRate, EquatorialSystem, PutPulseGuideDirection,
     SideOfPier, Telescope,
 };
-use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
-use chrono::{DateTime, Utc};
+use ascom_alpaca::{ASCOMError, ASCOMResult};
+
+use std::time::SystemTime;
+use time::OffsetDateTime;
 
 #[async_trait::async_trait]
 impl Device for StarAdventurer {
@@ -37,42 +38,30 @@ impl Device for StarAdventurer {
                     "east" => SideOfPier::East,
                     "west" => SideOfPier::West,
                     _ => {
-                        return Err(ASCOMError::new(
-                            ASCOMErrorCode::INVALID_VALUE,
-                            format!("Unknown pier side: \"{}\"", parameters),
-                        ))
+                        return Err(ASCOMError::invalid_value(format_args!(
+                            "Unknown pier side: \"{}\"",
+                            parameters
+                        )))
                     }
                 };
                 self.set_pier_side_after_manual_move(pier_side).await;
                 Ok("".to_string())
             }
-            _ => Err(ASCOMError::new(
-                ASCOMErrorCode::NOT_IMPLEMENTED,
-                "Action not implemented".to_string(),
-            )),
+            _ => Err(ASCOMError::ACTION_NOT_IMPLEMENTED),
         }
     }
 
     /* Command */
     async fn command_blind(&self, _command: String, _raw: String) -> ASCOMResult<()> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Blind commands not accepted".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     async fn command_bool(&self, _command: String, _raw: String) -> ASCOMResult<bool> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "Bool commands not accepted".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     async fn command_string(&self, _command: String, _raw: String) -> ASCOMResult<String> {
-        Err(ASCOMError::new(
-            ASCOMErrorCode::NOT_IMPLEMENTED,
-            "String commands not accepted".to_string(),
-        ))
+        Err(ASCOMError::NOT_IMPLEMENTED)
     }
 
     /* Connected */
@@ -319,9 +308,8 @@ impl Telescope for StarAdventurer {
 
     async fn set_slew_settle_time(&self, slew_settle_time: i32) -> ASCOMResult<()> {
         if slew_settle_time < 0 {
-            return Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                "Slew settle time must be nonegative".to_string(),
+            return Err(ASCOMError::invalid_value(
+                "Slew settle time must be nonegative",
             ));
         }
         self.set_slew_settle_time(slew_settle_time as u32).await
@@ -356,40 +344,22 @@ impl Telescope for StarAdventurer {
     }
 
     async fn set_tracking_rate(&self, tracking_rate: DriveRate) -> ASCOMResult<()> {
-        match DriveRate::try_from(tracking_rate) {
-            Ok(r) => self.set_tracking_rate(r).await,
-            Err(_e) => Err(ASCOMError::new(
-                ASCOMErrorCode::INVALID_VALUE,
-                "Invalid Tracking Rate".to_string(),
-            )),
-        }
+        self.set_tracking_rate(tracking_rate).await
     }
 
     async fn tracking_rates(&self) -> ASCOMResult<Vec<DriveRate>> {
         self.get_tracking_rates().await
     }
 
-    async fn utc_date(&self) -> ASCOMResult<String> {
+    async fn utc_date(&self) -> ASCOMResult<OffsetDateTime> {
         self.get_utc_date()
             .await
-            .map(|d| d.format(ALPACA_DATE_FMT).to_string())
+            .map(SystemTime::from)
+            .map(OffsetDateTime::from)
     }
 
-    async fn set_utc_date(&self, utc_date: String) -> ASCOMResult<()> {
-        let d = match DateTime::parse_from_str(&utc_date, ALPACA_DATE_FMT) {
-            Ok(t) => {
-                let naive_time = t.naive_utc();
-                DateTime::<Utc>::from_utc(naive_time, Utc)
-            }
-            Err(_e) => {
-                return Err(ASCOMError::new(
-                    ASCOMErrorCode::INVALID_VALUE,
-                    "Date format is incorrect".to_string(),
-                ))
-            }
-        };
-
-        self.set_utc_date(d).await
+    async fn set_utc_date(&self, utc_date: OffsetDateTime) -> ASCOMResult<()> {
+        self.set_utc_date(SystemTime::from(utc_date).into()).await
     }
 
     async fn abort_slew(&self) -> ASCOMResult<()> {
@@ -418,8 +388,7 @@ impl Telescope for StarAdventurer {
     }
 
     async fn move_axis(&self, axis: Axis, rate: f64) -> ASCOMResult<()> {
-        let result = self.move_axis(axis, rate).await;
-        result
+        self.move_axis(axis, rate).await
     }
 
     async fn park(&self) -> ASCOMResult<()> {

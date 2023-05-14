@@ -77,7 +77,7 @@ impl MotorBuilder {
         };
         let timeout = self
             .timeout
-            .unwrap_or_else(|| Duration::from_millis(consts::DEFAULT_TIMEOUT_MILLIS as u64));
+            .unwrap_or_else(|| Duration::from_millis(consts::DEFAULT_TIMEOUT_MILLIS));
         let mc = MotorController::new_serialport(path, consts::BAUD_RATE, timeout);
         if let Err(_e) = mc {
             return Err("Couldn't connect to StarAdventurer".to_string());
