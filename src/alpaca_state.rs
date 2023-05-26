@@ -51,19 +51,6 @@ impl Device for StarAdventurer {
         }
     }
 
-    /* Command */
-    async fn command_blind(&self, _command: String, _raw: String) -> ASCOMResult<()> {
-        Err(ASCOMError::NOT_IMPLEMENTED)
-    }
-
-    async fn command_bool(&self, _command: String, _raw: String) -> ASCOMResult<bool> {
-        Err(ASCOMError::NOT_IMPLEMENTED)
-    }
-
-    async fn command_string(&self, _command: String, _raw: String) -> ASCOMResult<String> {
-        Err(ASCOMError::NOT_IMPLEMENTED)
-    }
-
     /* Connected */
     async fn connected(&self) -> ASCOMResult<bool> {
         Ok(self.is_connected().await)
@@ -89,18 +76,6 @@ impl Device for StarAdventurer {
 
     async fn driver_version(&self) -> ASCOMResult<String> {
         Ok(env!("CARGO_PKG_VERSION").to_owned())
-    }
-
-    async fn interface_version(&self) -> ASCOMResult<i32> {
-        Ok(3)
-    }
-
-    async fn name(&self) -> ASCOMResult<String> {
-        Ok("StarAdventurer".to_owned())
-    }
-
-    async fn supported_actions(&self) -> ASCOMResult<Vec<String>> {
-        Ok(vec![])
     }
 }
 
