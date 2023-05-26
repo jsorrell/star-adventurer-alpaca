@@ -7,18 +7,20 @@ use synscan::util::SynScanError;
 
 pub fn convert_synscan_error(e: SynScanError) -> ASCOMError {
     ASCOMError::new(
-        match e {
-            SynScanError::UnknownCommand => ASCOMErrorCode::new_for_driver::<1>(),
-            SynScanError::CommandLengthError => ASCOMErrorCode::new_for_driver::<2>(),
-            SynScanError::MotorNotStopped => ASCOMErrorCode::new_for_driver::<3>(),
-            SynScanError::InvalidCharacter => ASCOMErrorCode::new_for_driver::<4>(),
-            SynScanError::NotInitialized => ASCOMErrorCode::new_for_driver::<5>(),
-            SynScanError::DriverSleeping => ASCOMErrorCode::new_for_driver::<6>(),
-            SynScanError::PECTrainingRunning => ASCOMErrorCode::new_for_driver::<7>(),
-            SynScanError::NoValidPECData => ASCOMErrorCode::new_for_driver::<8>(),
-            SynScanError::CommunicationError(_) => ASCOMErrorCode::new_for_driver::<9>(),
-        },
-        format!("{}", e),
+        ASCOMErrorCode::new_for_driver(
+            100 + match e {
+                SynScanError::UnknownCommand => 1,
+                SynScanError::CommandLengthError => 2,
+                SynScanError::MotorNotStopped => 3,
+                SynScanError::InvalidCharacter => 4,
+                SynScanError::NotInitialized => 5,
+                SynScanError::DriverSleeping => 6,
+                SynScanError::PECTrainingRunning => 7,
+                SynScanError::NoValidPECData => 8,
+                SynScanError::CommunicationError(_) => 9,
+            },
+        ),
+        e,
     )
 }
 

@@ -86,30 +86,33 @@ impl Connection {
             return Ok(());
         }
 
-        let motor_result = self.cb.create().await;
-        if let Err(e) = motor_result {
-            return ASCOMResult::Err(ASCOMError::new(
-                ASCOMErrorCode::new_for_driver::<0>(),
-                format!("Could not connect to motor controller: {}", e),
-            ));
-        }
+        let mut motor = self.cb.create().await.map_err(|e| {
+            ASCOMError::new(
+                ASCOMErrorCode::new_for_driver(0),
+                format_args!("Could not connect to motor controller: {}", e),
+            )
+        })?;
 
-        let mut motor = motor_result.unwrap();
-        if let Err(e) = motor.set_autoguide_speed(autoguide_speed).await {
-            return ASCOMResult::Err(ASCOMError::new(
-                ASCOMErrorCode::new_for_driver::<0>(),
-                format!("Error setting autoguide speed: {}", e),
-            ));
-        }
+        motor
+            .set_autoguide_speed(autoguide_speed)
+            .await
+            .map_err(|e| {
+                ASCOMError::new(
+                    ASCOMErrorCode::new_for_driver(1),
+                    format_args!("Error setting autoguide speed: {}", e),
+                )
+            })?;
 
         // TODO currently stopping the motor on connection. We should restore the state maybe
-        let result = motor.change_rate_open(MotionRate::ZERO).await;
-        if let Err(e) = result {
-            return ASCOMResult::Err(ASCOMError::new(
-                ASCOMErrorCode::new_for_driver::<0>(),
-                format!("Error stopping motor: {}", e),
-            ));
-        };
+        motor
+            .change_rate_open(MotionRate::ZERO)
+            .await
+            .map_err(|e| {
+                ASCOMError::new(
+                    ASCOMErrorCode::new_for_driver(2),
+                    format_args!("Error stopping motor: {}", e),
+                )
+            })?;
 
         let state = AscomState::Idle(GuideState::Idle);
 
@@ -258,10 +261,14 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::invalid_value("Can't start tracking while slewing"));
+                return Err(ASCOMError::invalid_value(
+                    "Can't start tracking while slewing",
+                ));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::invalid_value("Can't start tracking while parking"));
+                return Err(ASCOMError::invalid_value(
+                    "Can't start tracking while parking",
+                ));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -280,10 +287,14 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::invalid_value("Can't stop tracking while slewing"));
+                return Err(ASCOMError::invalid_value(
+                    "Can't stop tracking while slewing",
+                ));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::invalid_value("Can't stop tracking while parking"));
+                return Err(ASCOMError::invalid_value(
+                    "Can't stop tracking while parking",
+                ));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
@@ -324,10 +335,14 @@ impl Connection {
 
         match &mut *task_lock {
             AbortableTaskType::Slewing(_) => {
-                return Err(ASCOMError::invalid_operation("Can't move motor while slewing"));
+                return Err(ASCOMError::invalid_operation(
+                    "Can't move motor while slewing",
+                ));
             }
             AbortableTaskType::Parking(_) => {
-                return Err(ASCOMError::invalid_operation("Can't move motor while parking"));
+                return Err(ASCOMError::invalid_operation(
+                    "Can't move motor while parking",
+                ));
             }
             AbortableTaskType::Guiding(guide_task) => {
                 guide_task.abort().await.unwrap()?;
