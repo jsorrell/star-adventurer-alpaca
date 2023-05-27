@@ -6,7 +6,6 @@ use ascom_alpaca::api::{
 use ascom_alpaca::{ASCOMError, ASCOMResult};
 
 use std::time::SystemTime;
-use time::OffsetDateTime;
 
 #[async_trait::async_trait]
 impl Device for StarAdventurer {
@@ -326,15 +325,12 @@ impl Telescope for StarAdventurer {
         self.get_tracking_rates().await
     }
 
-    async fn utc_date(&self) -> ASCOMResult<OffsetDateTime> {
-        self.get_utc_date()
-            .await
-            .map(SystemTime::from)
-            .map(OffsetDateTime::from)
+    async fn utc_date(&self) -> ASCOMResult<SystemTime> {
+        self.get_utc_date().await.map(SystemTime::from)
     }
 
-    async fn set_utc_date(&self, utc_date: OffsetDateTime) -> ASCOMResult<()> {
-        self.set_utc_date(SystemTime::from(utc_date).into()).await
+    async fn set_utc_date(&self, utc_date: SystemTime) -> ASCOMResult<()> {
+        self.set_utc_date(utc_date.into()).await
     }
 
     async fn abort_slew(&self) -> ASCOMResult<()> {
