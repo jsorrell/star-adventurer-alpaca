@@ -72,12 +72,12 @@ impl MotorBuilder {
             self.path.clone().unwrap()
         } else {
             let port = Self::determine_serial_port()?;
-            log::warn!("Found StarAdventurer COM port at {}", port);
+            tracing::warn!("Found StarAdventurer COM port at {}", port);
             port
         };
         let timeout = self
             .timeout
-            .unwrap_or_else(|| Duration::from_millis(consts::DEFAULT_TIMEOUT_MILLIS as u64));
+            .unwrap_or_else(|| Duration::from_millis(consts::DEFAULT_TIMEOUT_MILLIS));
         let mc = MotorController::new_serialport(path, consts::BAUD_RATE, timeout);
         if let Err(_e) = mc {
             return Err("Couldn't connect to StarAdventurer".to_string());

@@ -1,34 +1,36 @@
-use rocket::futures::join;
+use tokio::join;
 
 use crate::astro_math;
 use crate::rotation_direction::RotationDirectionKey;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::api::SideOfPier;
+use ascom_alpaca::ASCOMResult;
 
 impl StarAdventurer {
-    pub fn calc_mech_ha_from_ha(ha: Hours, pier_side: PierSide) -> Hours {
+    pub fn calc_mech_ha_from_ha(ha: Hours, pier_side: SideOfPier) -> Hours {
         astro_math::modulo(
             match pier_side {
-                PierSide::East => ha - 6.,
-                PierSide::West => ha + 6.,
-                PierSide::Unknown => unreachable!(),
+                SideOfPier::East => ha - 6.,
+                SideOfPier::West => ha + 6.,
+                SideOfPier::Unknown => unreachable!(),
             },
             24.,
         )
     }
 
-    pub fn calc_ha_from_mech_ha(mech_ha: Hours, pier_side: PierSide) -> Hours {
+    pub fn calc_ha_from_mech_ha(mech_ha: Hours, pier_side: SideOfPier) -> Hours {
         astro_math::modulo(
             match pier_side {
-                PierSide::East => mech_ha + 6.,
-                PierSide::West => mech_ha - 6.,
-                PierSide::Unknown => unreachable!(),
+                SideOfPier::East => mech_ha + 6.,
+                SideOfPier::West => mech_ha - 6.,
+                SideOfPier::Unknown => unreachable!(),
             },
             24.,
         )
     }
 
-    pub(in crate::telescope_control) async fn get_ha(&self) -> AscomResult<Hours> {
+    pub(in crate::telescope_control) async fn get_ha(&self) -> ASCOMResult<Hours> {
         let mech_ha = self.get_mech_ha().await?;
         let pier_side = self.get_side_of_pier().await?;
         Ok(Self::calc_ha_from_mech_ha(mech_ha, pier_side))
@@ -39,7 +41,7 @@ impl StarAdventurer {
         motor_pos: Degrees,
         mech_ha_offset: Hours,
         key: RotationDirectionKey,
-        pier_side: PierSide,
+        pier_side: SideOfPier,
     ) -> Hours {
         let mech_ha = Self::calc_mech_ha(motor_pos, mech_ha_offset, key);
         Self::calc_ha_from_mech_ha(mech_ha, pier_side)
@@ -56,7 +58,7 @@ impl StarAdventurer {
 
     /// The right ascension (hours) of the mount's current equatorial coordinates,
     /// in the coordinate system given by the EquatorialSystem property
-    pub async fn get_ra(&self) -> AscomResult<Hours> {
+    pub async fn get_ra(&self) -> ASCOMResult<Hours> {
         let ha = self.get_ha().await?;
         let (observation_location, date_offset) = join!(
             async { *self.settings.observation_location.read().await },
@@ -72,12 +74,12 @@ impl StarAdventurer {
 
     /// The declination (degrees) of the mount's current equatorial coordinates, in the coordinate system given by the EquatorialSystem property.
     /// Reading the property will raise an error if the value is unavailable.
-    pub async fn get_dec(&self) -> AscomResult<Degrees> {
+    pub async fn get_dec(&self) -> ASCOMResult<Degrees> {
         Ok(*self.settings.declination.read().await)
     }
 
     /// The altitude above the local horizon of the mount's current position (degrees, positive up)
-    pub async fn get_altitude(&self) -> AscomResult<Degrees> {
+    pub async fn get_altitude(&self) -> ASCOMResult<Degrees> {
         let hour_angle = self.get_ha().await?;
 
         Ok(astro_math::calculate_alt_from_ha_dec(
@@ -88,7 +90,7 @@ impl StarAdventurer {
     }
 
     /// The azimuth at the local horizon of the mount's current position (degrees, North-referenced, positive East/clockwise).
-    pub async fn get_azimuth(&self) -> AscomResult<f64> {
+    pub async fn get_azimuth(&self) -> ASCOMResult<f64> {
         let hour_angle = self.get_ha().await?;
 
         Ok(astro_math::calculate_az_from_ha_dec(

@@ -6,6 +6,7 @@ use tokio::time::{sleep_until, Instant};
 use crate::telescope_control::connection::ascom_state::*;
 
 use super::*;
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 const EARLY_RETURN_MILLIS: u64 = 5;
 
@@ -30,7 +31,7 @@ impl LongTask for PulseGuideTask {
     /// Pulse Guides in the given direction for the given time
     /// Restores when complete
     /// Pulse guide has the lowest priority and can be cancelled by calling other methods
-    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<WaitableTask<()>>>
+    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<WaitableTask<()>>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -40,8 +41,8 @@ impl LongTask for PulseGuideTask {
 
         match &cs.ascom_state {
             AscomState::Parked => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
+                return Ok(Err(ASCOMError::new(
+                    ASCOMErrorCode::INVALID_WHILE_PARKED,
                     "Can't pulse guide while parked".to_string(),
                 )));
             }

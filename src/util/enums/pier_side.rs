@@ -1,35 +1,29 @@
-use rocket::form::FromFormField;
-use serde_repr::{Deserialize_repr, Serialize_repr};
+use ascom_alpaca::api::SideOfPier;
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone, Serialize_repr, Deserialize_repr, FromFormField)]
-#[repr(i8)]
-pub enum PierSide {
-    #[field(value = "-1")]
-    Unknown = -1,
-    #[field(value = "0")]
-    East = 0,
-    #[field(value = "1")]
-    West = 1,
+pub trait PierSideExt {
+    fn is_unknown(&self) -> bool;
+    fn opposite(self) -> Self;
+    fn flip(&mut self);
 }
 
-impl PierSide {
-    pub fn is_unknown(&self) -> bool {
+impl PierSideExt for SideOfPier {
+    fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown)
     }
 
-    pub fn opposite(self) -> Self {
+    fn opposite(self) -> Self {
         match self {
-            PierSide::Unknown => self,
-            PierSide::East => PierSide::West,
-            PierSide::West => PierSide::East,
+            SideOfPier::Unknown => self,
+            SideOfPier::East => SideOfPier::West,
+            SideOfPier::West => SideOfPier::East,
         }
     }
 
-    pub fn flip(&mut self) {
+    fn flip(&mut self) {
         match self {
-            PierSide::Unknown => {}
-            PierSide::East => *self = PierSide::West,
-            PierSide::West => *self = PierSide::East,
+            SideOfPier::Unknown => {}
+            SideOfPier::East => *self = SideOfPier::West,
+            SideOfPier::West => *self = SideOfPier::East,
         }
     }
 }

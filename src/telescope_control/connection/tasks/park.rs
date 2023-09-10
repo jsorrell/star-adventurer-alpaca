@@ -25,7 +25,7 @@ impl ParkTask {
 impl LongTask for ParkTask {
     /// Slews to pos and enters park state when complete
     /// Returns a future which will complete when the park finishes or is aborted
-    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<WaitableTask<()>>>
+    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<WaitableTask<()>>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -123,7 +123,7 @@ impl UnparkTask {
 
 #[async_trait]
 impl ShortTask for UnparkTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,

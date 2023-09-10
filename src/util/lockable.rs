@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 #[async_trait]

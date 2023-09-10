@@ -2,6 +2,7 @@ use crate::telescope_control::connection::motor::locked::HasMotor;
 use crate::telescope_control::connection::motor::Motor;
 
 use super::*;
+use async_trait::async_trait;
 
 pub enum PotentialConnection {
     Connected(ConnectedState),
@@ -16,21 +17,21 @@ impl PotentialConnection {
         }
     }
 
-    pub fn get_con(&self) -> AscomResult<&ConnectedState> {
+    pub fn get_con(&self) -> ASCOMResult<&ConnectedState> {
         match self {
             Self::Connected(c) => Ok(c),
-            Self::Disconnected => Err(AscomError::from_msg(
-                AscomErrorType::NotConnected,
+            Self::Disconnected => Err(ASCOMError::new(
+                ASCOMErrorCode::NOT_CONNECTED,
                 "Telescope Not Connected".to_string(),
             )),
         }
     }
 
-    pub fn get_mut_con(&mut self) -> AscomResult<&mut ConnectedState> {
+    pub fn get_mut_con(&mut self) -> ASCOMResult<&mut ConnectedState> {
         match self {
             Self::Connected(c) => Ok(c),
-            Self::Disconnected => Err(AscomError::from_msg(
-                AscomErrorType::NotConnected,
+            Self::Disconnected => Err(ASCOMError::new(
+                ASCOMErrorCode::NOT_CONNECTED,
                 "Telescope Not Connected".to_string(),
             )),
         }

@@ -171,6 +171,7 @@ pub fn modulo(val: f64, base: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_float_eq::*;
     use chrono::{TimeZone, Utc};
 
     struct TestPos {

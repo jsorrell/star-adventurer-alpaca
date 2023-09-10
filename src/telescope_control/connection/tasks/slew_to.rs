@@ -6,6 +6,7 @@ use crate::telescope_control::connection::ascom_state::*;
 use crate::telescope_control::connection::motor::MotorState;
 
 use super::*;
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 pub struct SlewToTask {
     target_pos: Degrees,
@@ -28,7 +29,7 @@ impl SlewToTask {
 #[async_trait]
 impl LongTask for SlewToTask {
     /// Slews to pos and restores the previous state when complete
-    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<WaitableTask<()>>>
+    async fn start<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<WaitableTask<()>>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -38,8 +39,8 @@ impl LongTask for SlewToTask {
 
         self.after_state = match &cs.ascom_state {
             AscomState::Parked => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
+                return Ok(Err(ASCOMError::new(
+                    ASCOMErrorCode::INVALID_WHILE_PARKED,
                     "Can't slew to while parked".to_string(),
                 )));
             }

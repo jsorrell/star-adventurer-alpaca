@@ -4,6 +4,7 @@ use tokio::join;
 use crate::astro_math;
 use crate::telescope_control::star_adventurer::StarAdventurer;
 use crate::util::*;
+use ascom_alpaca::{ASCOMError, ASCOMResult};
 
 impl StarAdventurer {
     /*** Date ***/
@@ -15,14 +16,14 @@ impl StarAdventurer {
     /// The UTC date/time of the telescope's internal clock in ISO 8601 format including fractional seconds.
     /// The general format (in Microsoft custom date format style) is yyyy-MM-ddTHH:mm:ss.fffffffZ E.g. 2016-03-04T17:45:31.1234567Z or 2016-11-14T07:03:08.1234567Z
     /// Please note the compulsory trailing Z indicating the 'Zulu', UTC time zone.
-    pub async fn get_utc_date(&self) -> AscomResult<DateTime<Utc>> {
+    pub async fn get_utc_date(&self) -> ASCOMResult<DateTime<Utc>> {
         Ok(Self::calculate_utc_date(
             *self.settings.date_offset.read().await,
         ))
     }
 
     /// The UTC date/time of the telescope's internal clock in ISO 8601 format including fractional seconds. The general format (in Microsoft custom date format style) is yyyy-MM-ddTHH:mm:ss.fffffffZ E.g. 2016-03-04T17:45:31.1234567Z or 2016-11-14T07:03:08.1234567Z Please note the compulsary trailing Z indicating the 'Zulu', UTC time zone.
-    pub async fn set_utc_date(&self, time: DateTime<Utc>) -> AscomResult<()> {
+    pub async fn set_utc_date(&self, time: DateTime<Utc>) -> ASCOMResult<()> {
         *self.settings.date_offset.write().await = time - Utc::now();
         Ok(())
     }
@@ -30,20 +31,17 @@ impl StarAdventurer {
     /*** Latitude ***/
 
     /// The geodetic(map) latitude (degrees, positive North, WGS84) of the site at which the telescope is located.
-    pub async fn get_latitude(&self) -> AscomResult<Degrees> {
+    pub async fn get_latitude(&self) -> ASCOMResult<Degrees> {
         Ok(self.settings.observation_location.read().await.latitude)
     }
 
     /// Sets the observing site's latitude (degrees).
-    pub async fn set_latitude(&self, latitude: Degrees) -> AscomResult<()> {
+    pub async fn set_latitude(&self, latitude: Degrees) -> ASCOMResult<()> {
         if !(-90. ..=90.).contains(&latitude) {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidValue,
-                format!(
-                    "Latitude of {} is outside the valid range of -90 to 90",
-                    latitude
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Latitude of {} is outside the valid range of -90 to 90",
+                latitude
+            )));
         }
         self.settings.observation_location.write().await.latitude = latitude;
         Ok(())
@@ -52,20 +50,17 @@ impl StarAdventurer {
     /*** Longitude ***/
 
     /// The longitude (degrees, positive East, WGS84) of the site at which the telescope is located.
-    pub async fn get_longitude(&self) -> AscomResult<Degrees> {
+    pub async fn get_longitude(&self) -> ASCOMResult<Degrees> {
         Ok(self.settings.observation_location.read().await.longitude)
     }
 
     /// Sets the observing site's longitude (degrees, positive East, WGS84).
-    pub async fn set_longitude(&self, longitude: Degrees) -> AscomResult<()> {
+    pub async fn set_longitude(&self, longitude: Degrees) -> ASCOMResult<()> {
         if !(-180. ..=180.).contains(&longitude) {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidValue,
-                format!(
-                    "Longitude of {} is outside the valid range of -180 to 180",
-                    longitude
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Longitude of {} is outside the valid range of -180 to 180",
+                longitude
+            )));
         }
         self.settings.observation_location.write().await.longitude = longitude;
         Ok(())
@@ -74,20 +69,17 @@ impl StarAdventurer {
     /*** Elevation ***/
 
     /// The elevation above mean sea level (meters) of the site at which the telescope is located
-    pub async fn get_elevation(&self) -> AscomResult<f64> {
+    pub async fn get_elevation(&self) -> ASCOMResult<f64> {
         Ok(self.settings.observation_location.read().await.elevation)
     }
 
     /// Sets the elevation above mean sea level (metres) of the site at which the telescope is located.
-    pub async fn set_elevation(&self, elevation: f64) -> AscomResult<()> {
+    pub async fn set_elevation(&self, elevation: f64) -> ASCOMResult<()> {
         if !(-300. ..=10000.).contains(&elevation) {
-            return Err(AscomError::from_msg(
-                AscomErrorType::InvalidValue,
-                format!(
-                    "Elevation of {} is outside the valid range of -300 to 10000",
-                    elevation
-                ),
-            ));
+            return Err(ASCOMError::invalid_value(format_args!(
+                "Elevation of {} is outside the valid range of -300 to 10000",
+                elevation
+            )));
         }
         self.settings.observation_location.write().await.elevation = elevation;
         Ok(())
@@ -96,7 +88,7 @@ impl StarAdventurer {
     /*** LST ***/
 
     /// The local apparent sidereal time from the telescope's internal clock (hours, sidereal)
-    pub async fn get_sidereal_time(&self) -> AscomResult<Hours> {
+    pub async fn get_sidereal_time(&self) -> ASCOMResult<Hours> {
         let (date, longitude) = join!(self.get_utc_date(), self.get_longitude());
         Ok(astro_math::calculate_local_sidereal_time(date?, longitude?))
     }
@@ -108,7 +100,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
-    use super::super::test_util;
+    use crate::telescope_control::test_util;
 
     #[tokio::test]
     async fn test_date() {

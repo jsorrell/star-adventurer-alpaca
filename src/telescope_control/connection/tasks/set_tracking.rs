@@ -1,6 +1,7 @@
 use crate::telescope_control::connection::ascom_state::*;
 
 use super::*;
+use ascom_alpaca::{ASCOMError, ASCOMErrorCode, ASCOMResult};
 
 pub struct StopTrackingTask {}
 
@@ -12,7 +13,7 @@ impl StopTrackingTask {
 
 #[async_trait]
 impl ShortTask for StopTrackingTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -22,8 +23,8 @@ impl ShortTask for StopTrackingTask {
 
         match &cs.ascom_state {
             AscomState::Parked => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
+                return Ok(Err(ASCOMError::new(
+                    ASCOMErrorCode::INVALID_WHILE_PARKED,
                     "Can't stop tracking while parked".to_string(),
                 )));
             }
@@ -31,10 +32,7 @@ impl ShortTask for StopTrackingTask {
                 return Ok(Ok(()));
             }
             AscomState::Slewing(SlewingState::MoveAxis(_, GuideState::Idle)) => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidOperation,
-                    "Can't stop tracking while moving axis".to_string(),
-                )));
+                return Ok(Err(ASCOMError::invalid_operation("Can't stop tracking while moving axis")));
             }
             AscomState::Idle(GuideState::Guiding) => unreachable!(),
             AscomState::Tracking(GuideState::Guiding) => unreachable!(),
@@ -70,7 +68,7 @@ impl StartTrackingTask {
 
 #[async_trait]
 impl ShortTask for StartTrackingTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,
@@ -80,8 +78,8 @@ impl ShortTask for StartTrackingTask {
 
         match &cs.ascom_state {
             AscomState::Parked => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidWhileParked,
+                return Ok(Err(ASCOMError::new(
+                    ASCOMErrorCode::INVALID_WHILE_PARKED,
                     "Can't start tracking while parked".to_string(),
                 )));
             }
@@ -92,10 +90,7 @@ impl ShortTask for StartTrackingTask {
                 }
             }
             AscomState::Slewing(SlewingState::MoveAxis(_, GuideState::Idle)) => {
-                return Ok(Err(AscomError::from_msg(
-                    AscomErrorType::InvalidOperation,
-                    "Can't start tracking while moving axis".to_string(),
-                )));
+                return Ok(Err(ASCOMError::invalid_operation("Can't start tracking while moving axis")));
             }
             AscomState::Idle(GuideState::Guiding) => unreachable!(),
             AscomState::Tracking(GuideState::Guiding) => unreachable!(),
@@ -125,7 +120,7 @@ impl UpdateTrackingRateTask {
 
 #[async_trait]
 impl ShortTask for UpdateTrackingRateTask {
-    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<AscomResult<()>>
+    async fn run<L, T>(&mut self, locker: &L) -> MotorResult<ASCOMResult<()>>
     where
         L: 'static + RWLockable<T> + Clone + Send + Sync,
         T: HasCS + HasMotor + Send + Sync,

@@ -6,22 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocket = { version = "^0.5.0-rc.1", features = ["json"] }
-serde = "^1"
-serde_json = "^1"
-serde_repr = "^0.1"
-rand = "^0.8"
-proc_macros = { path = "src/lib/proc_macros" }
+serde = "1.0.159"
+rand = "0.8.5"
 synscan = { git = "https://github.com/jsorrell/rust-synscan", branch = "main", features = ["serialport"] }
-chrono = "^0.4"
-tokio = { version = "^1", features = ["full"] }
-assert_float_eq = "^1"
-polynomials = "^0.2"
-confy = "^0.4"
-serialport = "^4"
-num_enum = "^0.5"
+chrono = "0.4.24"
+tokio = { version = "1.27.0", features = ["full"] }
+assert_float_eq = "1.1.3"
+polynomials = "0.2.4"
+confy = "0.5.1"
+serialport = "4.2.0"
+num_enum = "0.6.0"
 retry = "^1.3"
-log = "^0.4"
-env_logger = "^0.9"
-async-trait = "^0.1"
-spin_sleep = "1.0.0"
+async-trait = "0.1.68"
+spin_sleep = "1.1.1"
+ascom-alpaca = { version = "1.0.0-beta.1", features = ["server", "telescope"] }
+tracing-subscriber = "0.3.16"
+tracing = "0.1.37"
+net-literals = "0.2.0"
+eyre = "0.6.8"

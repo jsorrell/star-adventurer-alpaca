@@ -10,8 +10,6 @@ pub use lockable::*;
 pub use result::*;
 pub use tasks::*;
 
-pub use crate::consts::*;
-
 mod abort_result;
 mod tasks {
     pub use abortable_task::*;
@@ -27,7 +25,7 @@ mod lockable;
 mod result;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
-pub struct AxisRateRange {
+pub struct AxisRate {
     #[serde(rename = "Maximum")]
     pub(crate) maximum: f64,
     #[serde(rename = "Minimum")]

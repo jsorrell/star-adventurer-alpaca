@@ -1,6 +1,7 @@
 #![allow(unused)]
 use super::super::*;
 use crate::util::*;
+use tracing::warn;
 
 impl Motor {
     pub(in crate::telescope_control::connection::motor) async fn wait_for_stop_open(
